@@ -12,7 +12,7 @@ import matplotlib.patches as patches
 
 import klayout.db as db
 
-# Matplotlib 全局字体设置，确保中文和符号正常显示
+# Matplotlib 全局字体设置
 plt.rcParams['font.family'] = ['sans-serif']
 plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans', 'Arial', 'Microsoft YaHei']
 plt.rcParams['axes.unicode_minus'] = False
@@ -49,6 +49,7 @@ class GDSMultiStitcherApp:
                               '#17becf']
 
         self.setup_ui()
+        self.draw_preview(reset_view=True)
 
     def setup_ui(self):
         main_frame = ttk.Frame(self.root, padding=10)
@@ -103,8 +104,7 @@ class GDSMultiStitcherApp:
                                                                                                ipady=5)
 
         # Right Panel
-        right_frame = ttk.LabelFrame(main_frame,
-                                     text="Interactive Canvas (Drag Move, Scroll Zoom, Right-Click Options)", padding=5)
+        right_frame = ttk.LabelFrame(main_frame, text="Interactive Canvas", padding=5)
         right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
 
         self.figure = plt.Figure(figsize=(6, 5), dpi=100)
@@ -164,29 +164,45 @@ class GDSMultiStitcherApp:
     def draw_preview(self, reset_view=False):
         cur_xlim, cur_ylim = self.ax.get_xlim(), self.ax.get_ylim()
         self.ax.clear()
-        self.ax.add_patch(patches.Rectangle((0, 0), self.block_width, self.block_height, linewidth=3, edgecolor='red',
+
+        # --- 核心修改：隐藏轴线，并将刻度颜色/透明度设为与网格一致 ---
+        for spine in self.ax.spines.values():
+            spine.set_visible(False)
+
+        # 统一颜色
+        grid_color = '#cccccc'
+        grid_alpha = 0.4
+
+        # 设置刻度线与刻度标签的颜色与透明度
+        self.ax.tick_params(axis='both', which='both',
+                            length=4,
+                            width=0.8,
+                            direction='out',
+                            colors=grid_color,  # 刻度线颜色
+                            labelcolor='#999999')  # 刻度文本颜色（略深一点保证可读性）
+
+        # 绘制 Block 红框
+        self.ax.add_patch(patches.Rectangle((0, 0), self.block_width, self.block_height, linewidth=2, edgecolor='red',
                                             facecolor='none', zorder=1))
 
         if not self.gds_list:
             self.ax.text(self.block_width / 2, self.block_height / 2, 'No GDS Loaded', ha='center', va='center',
-                         color='gray')
+                         color='#bbbbbb', fontsize=12)
 
         for gds in self.gds_list:
             t_box = gds['trans'] * gds['base_bbox']
             sx, sy = t_box.left + gds['offset_x'], t_box.bottom + gds['offset_y']
             w, h = t_box.width(), t_box.height()
 
-            rect = patches.Rectangle((sx, sy), w, h, linewidth=2, edgecolor=gds['color'], facecolor=gds['color'],
+            rect = patches.Rectangle((sx, sy), w, h, linewidth=1.5, edgecolor=gds['color'], facecolor=gds['color'],
                                      alpha=0.3, zorder=10)
             self.ax.add_patch(rect)
             gds['patch'] = rect
             gds['texts'] = {}
 
-            # --- 统一动态字体大小计算逻辑 ---
             box_min = min(w, h)
-            canvas_min = min(self.block_width, self.block_height)
-            ratio = box_min / canvas_min if canvas_min > 0 else 1.0
-            # 基础字号 + 比例加成，确保 N/S/W/E 和中心字同步缩放
+            ratio = box_min / min(self.block_width, self.block_height) if min(self.block_width,
+                                                                              self.block_height) > 0 else 1.0
             dynamic_fs = max(6, min(35, int(6 + 18 * ratio)))
 
             bbox = gds['base_bbox']
@@ -208,7 +224,6 @@ class GDSMultiStitcherApp:
                 gds['texts'][label] = self.ax.text(wx, wy, label, ha=ha, va=va, fontsize=dynamic_fs, fontweight='bold',
                                                    zorder=100)
 
-            # --- 中心文字也使用完全相同的 dynamic_fs ---
             gds['center_text'] = self.ax.text(sx + w / 2, sy + h / 2, gds['name'], ha='center', va='center',
                                               fontsize=dynamic_fs, color='black', fontweight='bold', alpha=0.7,
                                               zorder=90)
@@ -221,7 +236,8 @@ class GDSMultiStitcherApp:
             self.ax.set_ylim(cur_ylim)
 
         self.ax.set_aspect('equal', adjustable='datalim')
-        self.ax.grid(True, linestyle='--', alpha=0.3)
+        # 统一网格样式
+        self.ax.grid(True, linestyle='-', color=grid_color, alpha=grid_alpha)
         self.canvas.draw()
 
     def on_scroll(self, event):
