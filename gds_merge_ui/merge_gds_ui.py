@@ -182,10 +182,12 @@ class GDSMultiStitcherApp:
             gds['patch'] = rect
             gds['texts'] = {}
 
+            # --- 统一动态字体大小计算逻辑 ---
             box_min = min(w, h)
-            ratio = box_min / min(self.block_width, self.block_height) if min(self.block_width,
-                                                                              self.block_height) > 0 else 1.0
-            dynamic_fs = max(5, min(35, int(6 + 15 * ratio)))
+            canvas_min = min(self.block_width, self.block_height)
+            ratio = box_min / canvas_min if canvas_min > 0 else 1.0
+            # 基础字号 + 比例加成，确保 N/S/W/E 和中心字同步缩放
+            dynamic_fs = max(6, min(35, int(6 + 18 * ratio)))
 
             bbox = gds['base_bbox']
             cx_l, cy_l = (bbox.left + bbox.right) / 2, (bbox.bottom + bbox.top) / 2
@@ -206,8 +208,9 @@ class GDSMultiStitcherApp:
                 gds['texts'][label] = self.ax.text(wx, wy, label, ha=ha, va=va, fontsize=dynamic_fs, fontweight='bold',
                                                    zorder=100)
 
+            # --- 中心文字也使用完全相同的 dynamic_fs ---
             gds['center_text'] = self.ax.text(sx + w / 2, sy + h / 2, gds['name'], ha='center', va='center',
-                                              fontsize=dynamic_fs * 1.1, color='black', fontweight='bold', alpha=0.7,
+                                              fontsize=dynamic_fs, color='black', fontweight='bold', alpha=0.7,
                                               zorder=90)
 
         if reset_view:
