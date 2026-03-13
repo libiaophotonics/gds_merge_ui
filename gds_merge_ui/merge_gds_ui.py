@@ -248,7 +248,7 @@ class GDSMultiStitcherApp:
 
         # 背景主框
         rect_block = patches.Rectangle((0, 0), self.block_width, self.block_height,
-                                       linewidth=5, edgecolor='black', facecolor='none', zorder=1)
+                                       linewidth=3, edgecolor='red', facecolor='none', zorder=1)
         self.ax.add_patch(rect_block)
 
         if not self.gds_list:
@@ -274,7 +274,7 @@ class GDSMultiStitcherApp:
             box_min_edge = min(t_box.width(), t_box.height())
             canvas_min_edge = min(self.block_width, self.block_height)
             ratio = box_min_edge / canvas_min_edge if canvas_min_edge > 0 else 1.0
-            dynamic_fontsize = max(4, min(40, int(4 + 10 * ratio)))
+            dynamic_fontsize = max(6, min(40, int(6 + 20 * ratio)))
 
             box_l, box_r = start_x, start_x + t_box.width()
             box_b, box_t = start_y, start_y + t_box.height()
