@@ -12,7 +12,7 @@ import matplotlib.patches as patches
 
 import klayout.db as db
 
-# Matplotlib global font settings
+# Matplotlib 全局字体设置，确保中文和符号正常显示
 plt.rcParams['font.family'] = ['sans-serif']
 plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans', 'Arial', 'Microsoft YaHei']
 plt.rcParams['axes.unicode_minus'] = False
@@ -24,25 +24,20 @@ class GDSMultiStitcherApp:
         self.root.title("GDS MERGER 1.0")
 
         window_width = 1150
-        window_height = 720  # 稍微增加高度以容纳新按键
+        window_height = 720
         screen_width = self.root.winfo_screenwidth()
         screen_height = self.root.winfo_screenheight()
         x_cordinate = int((screen_width / 2) - (window_width / 2))
         y_cordinate = int((screen_height / 2) - (window_height / 2))
         self.root.geometry(f"{window_width}x{window_height}+{x_cordinate}+{y_cordinate}")
 
-        # Core data structure
         self.gds_list = []
-
-        # Interaction state variables
-        self.current_selected_idx = -1
         self.dragging_idx = -1
         self.drag_start_x = 0
         self.drag_start_y = 0
         self.rect_start_x = 0
         self.rect_start_y = 0
 
-        # UI Variables
         self.block_width_var = tk.StringVar(value="5000.0")
         self.block_height_var = tk.StringVar(value="5000.0")
         self.block_width = 5000.0
@@ -59,12 +54,11 @@ class GDSMultiStitcherApp:
         main_frame = ttk.Frame(self.root, padding=10)
         main_frame.pack(fill=tk.BOTH, expand=True)
 
-        # ==================== Left Panel: Controls ====================
         left_frame = ttk.Frame(main_frame, width=380)
         left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
         left_frame.pack_propagate(False)
 
-        # 1. File List Management
+        # 1. GDS File List
         list_frame = ttk.LabelFrame(left_frame, text="1. GDS File List", padding=10)
         list_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
 
@@ -88,217 +82,139 @@ class GDSMultiStitcherApp:
         block_settings_frame = ttk.LabelFrame(left_frame, text="1b. Block Size & Zoom Settings", padding=10)
         block_settings_frame.pack(fill=tk.X, pady=(0, 10))
 
-        width_frame = ttk.Frame(block_settings_frame)
-        width_frame.pack(fill=tk.X, pady=2)
-        ttk.Label(width_frame, text="Block Width (μm):").pack(side=tk.LEFT)
-        self.entry_block_width = ttk.Entry(width_frame, textvariable=self.block_width_var, width=15)
-        self.entry_block_width.pack(side=tk.LEFT, padx=(5, 15))
+        ttk.Label(block_settings_frame, text="Block Width/Height (μm):").pack(anchor=tk.W)
+        entry_f = ttk.Frame(block_settings_frame)
+        entry_f.pack(fill=tk.X)
+        ttk.Entry(entry_f, textvariable=self.block_width_var, width=10).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Label(entry_f, text=" x ").pack(side=tk.LEFT)
+        ttk.Entry(entry_f, textvariable=self.block_height_var, width=10).pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-        height_frame = ttk.Frame(block_settings_frame)
-        height_frame.pack(fill=tk.X, pady=2)
-        ttk.Label(height_frame, text="Block Height (μm):").pack(side=tk.LEFT)
-        self.entry_block_height = ttk.Entry(height_frame, textvariable=self.block_height_var, width=15)
-        self.entry_block_height.pack(side=tk.LEFT, padx=5)
-
-        self.apply_block_size_btn = ttk.Button(block_settings_frame, text="Apply Block Size",
-                                               command=self.update_block_size)
-        self.apply_block_size_btn.pack(fill=tk.X, pady=(5, 5))
-
-        # --- 新增 Zoom Fit 按钮 ---
-        self.zoom_fit_btn = ttk.Button(block_settings_frame, text="🔍 Zoom Fit (Show Block)",
-                                       command=lambda: self.draw_preview(reset_view=True))
-        self.zoom_fit_btn.pack(fill=tk.X, pady=(0, 0))
+        ttk.Button(block_settings_frame, text="Apply Block Size", command=self.update_block_size).pack(fill=tk.X,
+                                                                                                       pady=(5, 2))
+        ttk.Button(block_settings_frame, text="🔍 Zoom Fit (Show Block)",
+                   command=lambda: self.draw_preview(reset_view=True)).pack(fill=tk.X)
 
         # 2. Export Settings
         output_frame = ttk.LabelFrame(left_frame, text="2. Export Settings", padding=10)
         output_frame.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(output_frame, text="Merged Top Cell Name:").pack(anchor=tk.W)
+        ttk.Entry(output_frame, textvariable=self.top_cell_name_var).pack(fill=tk.X, pady=5)
+        ttk.Button(output_frame, text="💾 Export Merged GDS", command=self.execute_stitch).pack(fill=tk.X, pady=5,
+                                                                                               ipady=5)
 
-        cell_frame = ttk.Frame(output_frame)
-        cell_frame.pack(fill=tk.X, pady=(0, 5))
-        ttk.Label(cell_frame, text="Merged Top Cell Name:").pack(side=tk.LEFT)
-        ttk.Entry(cell_frame, textvariable=self.top_cell_name_var, width=15).pack(side=tk.LEFT, fill=tk.X, expand=True,
-                                                                                  padx=5)
-
-        self.run_btn = ttk.Button(output_frame, text="💾 Export Merged GDS", command=self.execute_stitch)
-        self.run_btn.pack(fill=tk.X, pady=(10, 0), ipady=5)
-
-        # ==================== Right Panel: Canvas Preview ====================
-        right_frame = ttk.LabelFrame(main_frame, text="Interactive Canvas (Drag Move, Scroll Zoom, Right-Click Options)",
-                                     padding=5)
+        # Right Panel
+        right_frame = ttk.LabelFrame(main_frame,
+                                     text="Interactive Canvas (Drag Move, Scroll Zoom, Right-Click Options)", padding=5)
         right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
 
         self.figure = plt.Figure(figsize=(6, 5), dpi=100)
-        self.figure.subplots_adjust(right=0.75)
-
         self.ax = self.figure.add_subplot(111)
         self.canvas = FigureCanvasTkAgg(self.figure, right_frame)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-
-        self.ax.text(0.5, 0.5, 'Right-Click a block to Copy/Rotate/Flip', ha='center', va='center', color='gray',
-                     fontsize=12)
-        self.ax.set_xticks([])
-        self.ax.set_yticks([])
 
         self.canvas.mpl_connect('button_press_event', self.on_press)
         self.canvas.mpl_connect('motion_notify_event', self.on_motion)
         self.canvas.mpl_connect('button_release_event', self.on_release)
         self.canvas.mpl_connect('scroll_event', self.on_scroll)
 
-        status_bar = ttk.Label(self.root, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W, padding=2)
+        status_bar = ttk.Label(self.root, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W)
         status_bar.pack(side=tk.BOTTOM, fill=tk.X)
 
     def extract_base_bbox(self, filepath):
         layout = db.Layout()
         layout.read(filepath)
-        if len(layout.top_cells()) == 0:
-            raise ValueError("No top cells found in GDS.")
         return layout.top_cells()[0].dbbox()
 
     def update_block_size(self):
         try:
-            w, h = float(self.block_width_var.get()), float(self.block_height_var.get())
-            if w <= 0 or h <= 0: raise ValueError("Must be positive.")
-            self.block_width, self.block_height = w, h
-            self.status_var.set(f"Block size updated to {w}x{h} μm.")
+            self.block_width = float(self.block_width_var.get())
+            self.block_height = float(self.block_height_var.get())
             self.draw_preview(reset_view=True)
-        except ValueError as e:
-            messagebox.showerror("Format Error", str(e))
+        except:
+            messagebox.showerror("Error", "Invalid dimensions")
 
     def add_gds(self):
-        filepaths = filedialog.askopenfilenames(title="Select GDS Files", filetypes=[("GDS Files", "*.gds")])
-        for filepath in filepaths:
+        paths = filedialog.askopenfilenames(filetypes=[("GDS Files", "*.gds")])
+        for p in paths:
             try:
-                base_bbox = self.extract_base_bbox(filepath)
+                base_name = os.path.splitext(os.path.basename(p))[0]
                 gds_info = {
-                    'path': filepath, 'name': os.path.basename(filepath),
-                    'base_bbox': base_bbox, 'trans': db.DTrans(),
+                    'path': p, 'name': base_name,
+                    'base_bbox': self.extract_base_bbox(p), 'trans': db.DTrans(),
                     'offset_x': 0.0, 'offset_y': 0.0,
                     'color': self.color_palette[len(self.gds_list) % len(self.color_palette)],
-                    'patch': None, 'texts': {}
+                    'patch': None, 'texts': {}, 'center_text': None
                 }
                 self.gds_list.append(gds_info)
-                self.listbox.insert(tk.END, f"[{len(self.gds_list)}] {gds_info['name']}")
+                self.listbox.insert(tk.END, f"[{len(self.gds_list)}] {base_name}")
             except Exception as e:
-                messagebox.showerror("Read Error", f"Cannot read {filepath}:\n{str(e)}")
-
-        if filepaths:
-            self.draw_preview(reset_view=True)
-
-    def show_context_menu(self, idx):
-        menu = tk.Menu(self.root, tearoff=0, font=("Arial", 10))
-        gds_name = self.gds_list[idx]['name']
-        menu.add_command(label=f"Selected: {gds_name}", state=tk.DISABLED)
-        menu.add_separator()
-        menu.add_command(label="📋 Duplicate (Copy)", command=lambda: self.action_duplicate(idx))
-        menu.add_separator()
-        menu.add_command(label="🔄 Rotate 90° CCW", command=lambda: self.action_rotate_ccw(idx))
-        menu.add_command(label="↻ Rotate 90° CW", command=lambda: self.action_rotate_cw(idx))
-        menu.add_separator()
-        menu.add_command(label="↔️ Flip Horizontal (L-R)", command=lambda: self.action_flip_horizontal(idx))
-        menu.add_command(label="↕️ Flip Vertical (T-B)", command=lambda: self.action_flip_vertical(idx))
-        menu.add_separator()
-        menu.add_command(label="❌ Delete Block", command=lambda: self.action_delete(idx))
-        x, y = self.root.winfo_pointerxy()
-        menu.post(x, y)
-
-    def action_duplicate(self, idx):
-        orig = self.gds_list[idx]
-        shift = self.block_width * 0.05 if self.block_width > 0 else 500
-        new_gds = {
-            'path': orig['path'], 'name': orig['name'] + "_copy",
-            'base_bbox': orig['base_bbox'], 'trans': orig['trans'] * db.DTrans(),
-            'offset_x': orig['offset_x'] + shift, 'offset_y': orig['offset_y'] - shift,
-            'color': orig['color'], 'patch': None, 'texts': {}
-        }
-        self.gds_list.append(new_gds)
-        self.listbox.insert(tk.END, f"[{len(self.gds_list)}] {new_gds['name']}")
-        self.draw_preview()
-
-    def action_rotate_ccw(self, idx):
-        self.gds_list[idx]['trans'] = db.DTrans(1, False, 0, 0) * self.gds_list[idx]['trans']
-        self.draw_preview()
-
-    def action_rotate_cw(self, idx):
-        self.gds_list[idx]['trans'] = db.DTrans(3, False, 0, 0) * self.gds_list[idx]['trans']
-        self.draw_preview()
-
-    def action_flip_horizontal(self, idx):
-        self.gds_list[idx]['trans'] = db.DTrans(2, True, 0, 0) * self.gds_list[idx]['trans']
-        self.draw_preview()
-
-    def action_flip_vertical(self, idx):
-        self.gds_list[idx]['trans'] = db.DTrans(0, True, 0, 0) * self.gds_list[idx]['trans']
-        self.draw_preview()
-
-    def action_delete(self, idx):
-        del self.gds_list[idx]
-        self.listbox.delete(0, tk.END)
-        for i, gds in enumerate(self.gds_list):
-            self.listbox.insert(tk.END, f"[{i + 1}] {gds['name']}")
-        self.draw_preview(reset_view=True)
+                messagebox.showerror("Error", str(e))
+        if paths: self.draw_preview(reset_view=True)
 
     def action_delete_selected(self):
         selection = self.listbox.curselection()
-        if selection: self.action_delete(selection[0])
+        if selection:
+            idx = selection[0]
+            del self.gds_list[idx]
+            self.listbox.delete(0, tk.END)
+            for i, gds in enumerate(self.gds_list):
+                self.listbox.insert(tk.END, f"[{i + 1}] {gds['name']}")
+            self.draw_preview(reset_view=False)
 
     def draw_preview(self, reset_view=False):
-        cur_xlim = self.ax.get_xlim()
-        cur_ylim = self.ax.get_ylim()
+        cur_xlim, cur_ylim = self.ax.get_xlim(), self.ax.get_ylim()
         self.ax.clear()
-
-        # 背景主框
-        rect_block = patches.Rectangle((0, 0), self.block_width, self.block_height,
-                                       linewidth=3, edgecolor='red', facecolor='none', zorder=1)
-        self.ax.add_patch(rect_block)
+        self.ax.add_patch(patches.Rectangle((0, 0), self.block_width, self.block_height, linewidth=3, edgecolor='red',
+                                            facecolor='none', zorder=1))
 
         if not self.gds_list:
-            self.ax.text(self.block_width / 2, self.block_height / 2, 'Add GDS Files\nScroll: Zoom | Drag: Move',
-                         ha='center', va='center', color='gray', fontsize=12)
-            reset_view = True
+            self.ax.text(self.block_width / 2, self.block_height / 2, 'No GDS Loaded', ha='center', va='center',
+                         color='gray')
 
         for gds in self.gds_list:
             t_box = gds['trans'] * gds['base_bbox']
-            start_x, start_y = t_box.left + gds['offset_x'], t_box.bottom + gds['offset_y']
-            rect = patches.Rectangle((start_x, start_y), t_box.width(), t_box.height(),
-                                     linewidth=2, edgecolor=gds['color'], facecolor=gds['color'],
+            sx, sy = t_box.left + gds['offset_x'], t_box.bottom + gds['offset_y']
+            w, h = t_box.width(), t_box.height()
+
+            rect = patches.Rectangle((sx, sy), w, h, linewidth=2, edgecolor=gds['color'], facecolor=gds['color'],
                                      alpha=0.3, zorder=10)
             self.ax.add_patch(rect)
             gds['patch'] = rect
+            gds['texts'] = {}
 
-            # NSEW 文本绘制
+            box_min = min(w, h)
+            ratio = box_min / min(self.block_width, self.block_height) if min(self.block_width,
+                                                                              self.block_height) > 0 else 1.0
+            dynamic_fs = max(5, min(35, int(6 + 15 * ratio)))
+
             bbox = gds['base_bbox']
-            cx, cy = (bbox.left + bbox.right) / 2, (bbox.bottom + bbox.top) / 2
-            pts = {'N': db.DPoint(cx, bbox.top), 'S': db.DPoint(cx, bbox.bottom),
-                   'E': db.DPoint(bbox.right, cy), 'W': db.DPoint(bbox.left, cy)}
+            cx_l, cy_l = (bbox.left + bbox.right) / 2, (bbox.bottom + bbox.top) / 2
+            pts = {'N': (cx_l, bbox.top), 'S': (cx_l, bbox.bottom), 'E': (bbox.right, cy_l), 'W': (bbox.left, cy_l)}
 
-            box_min_edge = min(t_box.width(), t_box.height())
-            canvas_min_edge = min(self.block_width, self.block_height)
-            ratio = box_min_edge / canvas_min_edge if canvas_min_edge > 0 else 1.0
-            dynamic_fontsize = max(6, min(40, int(6 + 20 * ratio)))
-
-            box_l, box_r = start_x, start_x + t_box.width()
-            box_b, box_t = start_y, start_y + t_box.height()
-            tol = box_min_edge * 0.001
-
-            for label, pt in pts.items():
-                t_pt = gds['trans'] * pt
+            for label, pt_coords in pts.items():
+                t_pt = gds['trans'] * db.DPoint(*pt_coords)
                 wx, wy = t_pt.x + gds['offset_x'], t_pt.y + gds['offset_y']
                 ha, va = 'center', 'center'
-                if abs(wx - box_r) < tol: ha = 'right'
-                elif abs(wx - box_l) < tol: ha = 'left'
-                if abs(wy - box_t) < tol: va = 'top'
-                elif abs(wy - box_b) < tol: va = 'bottom'
+                if abs(wx - (sx + w)) < box_min * 0.01:
+                    ha = 'right'
+                elif abs(wx - sx) < box_min * 0.01:
+                    ha = 'left'
+                if abs(wy - (sy + h)) < box_min * 0.01:
+                    va = 'top'
+                elif abs(wy - sy) < box_min * 0.01:
+                    va = 'bottom'
+                gds['texts'][label] = self.ax.text(wx, wy, label, ha=ha, va=va, fontsize=dynamic_fs, fontweight='bold',
+                                                   zorder=100)
 
-                txt = self.ax.text(wx, wy, label, ha=ha, va=va, color='black',
-                                   fontweight='bold', fontsize=dynamic_fontsize, zorder=100)
-                gds['texts'][label] = txt
+            gds['center_text'] = self.ax.text(sx + w / 2, sy + h / 2, gds['name'], ha='center', va='center',
+                                              fontsize=dynamic_fs * 1.1, color='black', fontweight='bold', alpha=0.7,
+                                              zorder=90)
 
         if reset_view:
-            pad_x, pad_y = self.block_width * 0.1, self.block_height * 0.1
-            self.ax.set_xlim(0 - pad_x, self.block_width + pad_x)
-            self.ax.set_ylim(0 - pad_y, self.block_height + pad_y)
+            self.ax.set_xlim(-self.block_width * 0.1, self.block_width * 1.1)
+            self.ax.set_ylim(-self.block_height * 0.1, self.block_height * 1.1)
         else:
-            self.ax.set_xlim(cur_xlim)
+            self.ax.set_xlim(cur_xlim);
             self.ax.set_ylim(cur_ylim)
 
         self.ax.set_aspect('equal', adjustable='datalim')
@@ -306,48 +222,49 @@ class GDSMultiStitcherApp:
         self.canvas.draw()
 
     def on_scroll(self, event):
-        if event.inaxes != self.ax: return
-        base_scale = 1.2
-        scale_factor = 1/base_scale if event.button == 'up' else base_scale
-        xdata, ydata = event.xdata, event.ydata
-        cur_xlim, cur_ylim = self.ax.get_xlim(), self.ax.get_ylim()
-        self.ax.set_xlim([xdata - (xdata - cur_xlim[0]) * scale_factor, xdata + (cur_xlim[1] - xdata) * scale_factor])
-        self.ax.set_ylim([ydata - (ydata - cur_ylim[0]) * scale_factor, ydata + (cur_ylim[1] - ydata) * scale_factor])
+        if not event.inaxes: return
+        scale = 1 / 1.2 if event.button == 'up' else 1.2
+        cur_x, cur_y = self.ax.get_xlim(), self.ax.get_ylim()
+        self.ax.set_xlim(
+            [event.xdata - (event.xdata - cur_x[0]) * scale, event.xdata + (cur_x[1] - event.xdata) * scale])
+        self.ax.set_ylim(
+            [event.ydata - (event.ydata - cur_y[0]) * scale, event.ydata + (cur_y[1] - event.ydata) * scale])
         self.canvas.draw_idle()
 
     def on_press(self, event):
-        if event.inaxes != self.ax: return
-        for idx in range(len(self.gds_list)-1, -1, -1):
-            gds = self.gds_list[idx]
-            if gds['patch'] and gds['patch'].contains(event)[0]:
-                if event.button in [2, 3]: self.show_context_menu(idx)
+        if not event.inaxes: return
+        for i in range(len(self.gds_list) - 1, -1, -1):
+            if self.gds_list[i]['patch'].contains(event)[0]:
+                if event.button in [2, 3]:
+                    self.show_context_menu(i)
                 elif event.button == 1:
-                    self.dragging_idx = idx
+                    self.dragging_idx = i
                     self.drag_start_x, self.drag_start_y = event.xdata, event.ydata
-                    self.rect_start_x, self.rect_start_y = gds['patch'].get_x(), gds['patch'].get_y()
-                    gds['patch'].set_alpha(0.6)
+                    self.rect_start_x, self.rect_start_y = self.gds_list[i]['patch'].get_x(), self.gds_list[i][
+                        'patch'].get_y()
+                    self.gds_list[i]['patch'].set_alpha(0.6)
                     self.listbox.selection_clear(0, tk.END)
-                    self.listbox.selection_set(idx)
-                    self.canvas.draw_idle()
+                    self.listbox.selection_set(i)
                 return
 
     def on_motion(self, event):
-        if self.dragging_idx == -1 or event.inaxes != self.ax: return
+        if self.dragging_idx == -1 or not event.inaxes: return
         gds = self.gds_list[self.dragging_idx]
-        new_x = self.rect_start_x + (event.xdata - self.drag_start_x)
-        new_y = self.rect_start_y + (event.ydata - self.drag_start_y)
-        gds['patch'].set_x(new_x)
-        gds['patch'].set_y(new_y)
+        nx = self.rect_start_x + (event.xdata - self.drag_start_x)
+        ny = self.rect_start_y + (event.ydata - self.drag_start_y)
+        gds['patch'].set_x(nx);
+        gds['patch'].set_y(ny)
         t_box = gds['trans'] * gds['base_bbox']
-        gds['offset_x'], gds['offset_y'] = new_x - t_box.left, new_y - t_box.bottom
-        if 'texts' in gds:
-            bbox = gds['base_bbox']
-            cx, cy = (bbox.left + bbox.right) / 2, (bbox.bottom + bbox.top) / 2
-            pts = {'N': db.DPoint(cx, bbox.top), 'S': db.DPoint(cx, bbox.bottom),
-                   'E': db.DPoint(bbox.right, cy), 'W': db.DPoint(bbox.left, cy)}
-            for label, txt in gds['texts'].items():
-                t_pt = gds['trans'] * pts[label]
-                txt.set_position((t_pt.x + gds['offset_x'], t_pt.y + gds['offset_y']))
+        gds['offset_x'], gds['offset_y'] = nx - t_box.left, ny - t_box.bottom
+
+        bbox = gds['base_bbox']
+        pts = {'N': ((bbox.left + bbox.right) / 2, bbox.top), 'S': ((bbox.left + bbox.right) / 2, bbox.bottom),
+               'E': (bbox.right, (bbox.top + bbox.bottom) / 2), 'W': (bbox.left, (bbox.top + bbox.bottom) / 2)}
+        for label, txt in gds['texts'].items():
+            t_pt = gds['trans'] * db.DPoint(*pts[label])
+            txt.set_position((t_pt.x + gds['offset_x'], t_pt.y + gds['offset_y']))
+        if gds['center_text']:
+            gds['center_text'].set_position((nx + t_box.width() / 2, ny + t_box.height() / 2))
         self.canvas.draw_idle()
 
     def on_release(self, event):
@@ -356,28 +273,60 @@ class GDSMultiStitcherApp:
             self.dragging_idx = -1
             self.canvas.draw_idle()
 
+    def show_context_menu(self, idx):
+        menu = tk.Menu(self.root, tearoff=0)
+        menu.add_command(label=f"Duplicate {self.gds_list[idx]['name']}", command=lambda: self.action_duplicate(idx))
+        menu.add_separator()
+        menu.add_command(label="Rotate 90 CCW", command=lambda: self.action_rotate_ccw(idx))
+        menu.add_command(label="Rotate 90 CW", command=lambda: self.action_rotate_cw(idx))
+        menu.add_command(label="Flip H", command=lambda: self.action_flip_horizontal(idx))
+        menu.add_command(label="Flip V", command=lambda: self.action_flip_vertical(idx))
+        menu.post(int(self.root.winfo_pointerx()), int(self.root.winfo_pointery()))
+
+    def action_duplicate(self, idx):
+        o = self.gds_list[idx]
+        new_gds = {
+            'path': o['path'], 'name': o['name'],
+            'base_bbox': o['base_bbox'], 'trans': o['trans'] * db.DTrans(),
+            'offset_x': o['offset_x'] + 200, 'offset_y': o['offset_y'] - 200,
+            'color': o['color'], 'patch': None, 'texts': {}, 'center_text': None
+        }
+        self.gds_list.append(new_gds)
+        self.listbox.insert(tk.END, f"[{len(self.gds_list)}] {o['name']}")
+        self.draw_preview()
+
+    def action_rotate_ccw(self, i):
+        self.gds_list[i]['trans'] = db.DTrans(1, False, 0, 0) * self.gds_list[i]['trans']; self.draw_preview()
+
+    def action_rotate_cw(self, i):
+        self.gds_list[i]['trans'] = db.DTrans(3, False, 0, 0) * self.gds_list[i]['trans']; self.draw_preview()
+
+    def action_flip_horizontal(self, i):
+        self.gds_list[i]['trans'] = db.DTrans(2, True, 0, 0) * self.gds_list[i]['trans']; self.draw_preview()
+
+    def action_flip_vertical(self, i):
+        self.gds_list[i]['trans'] = db.DTrans(0, True, 0, 0) * self.gds_list[i]['trans']; self.draw_preview()
+
     def execute_stitch(self):
         if not self.gds_list: return
-        out_path = filedialog.asksaveasfilename(defaultextension=".gds", filetypes=[("GDS Files", "*.gds")])
-        if not out_path: return
+        out_p = filedialog.asksaveasfilename(defaultextension=".gds")
+        if not out_p: return
         try:
-            layout = db.Layout()
-            merged_top = layout.create_cell(self.top_cell_name_var.get() or "MERGED")
+            layout = db.Layout();
+            merged = layout.create_cell(self.top_cell_name_var.get() or "MERGED")
             cache = {}
-            for gds in self.gds_list:
-                if gds['path'] not in cache:
-                    old_idx = [c.cell_index() for c in layout.top_cells()]
-                    layout.read(gds['path'])
-                    new_top = [c for c in layout.top_cells() if c.cell_index() not in old_idx and c.name != merged_top.name]
-                    if new_top: cache[gds['path']] = new_top[0].cell_index()
-                if gds['path'] in cache:
-                    final_trans = db.DTrans(gds['offset_x'], gds['offset_y']) * gds['trans']
-                    merged_top.insert(db.DCellInstArray(cache[gds['path']], final_trans))
-            layout.write(out_path)
-            messagebox.showinfo("Success", "GDS Exported!")
+            for g in self.gds_list:
+                if g['path'] not in cache:
+                    old = [c.cell_index() for c in layout.top_cells()]
+                    layout.read(g['path'])
+                    new = [c for c in layout.top_cells() if c.cell_index() not in old and c.name != merged.name]
+                    if new: cache[g['path']] = new[0].cell_index()
+                merged.insert(db.DCellInstArray(cache[g['path']], db.DTrans(g['offset_x'], g['offset_y']) * g['trans']))
+            layout.write(out_p);
+            messagebox.showinfo("OK", "Merged Success!")
         except Exception as e:
             messagebox.showerror("Error", str(e))
 
+
 if __name__ == "__main__":
-    app = GDSMultiStitcherApp()
-    app.root.mainloop()
+    GDSMultiStitcherApp().root.mainloop()
