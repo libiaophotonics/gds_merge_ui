@@ -1,4 +1,5 @@
 import os
+import math
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
@@ -32,7 +33,7 @@ class GDSMultiStitcherApp:
 
         # Core data structure:
         # [{'path': str, 'name': str, 'base_bbox': db.DBox, 'trans': db.DTrans,
-        #   'offset_x': float, 'offset_y': float, 'color': str, 'patch': object}]
+        #   'offset_x': float, 'offset_y': float, 'color': str, 'patch': object, 'texts': dict}]
         self.gds_list = []
 
         # Interaction state variables
@@ -174,7 +175,8 @@ class GDSMultiStitcherApp:
                     'offset_x': 0.0,
                     'offset_y': 0.0,
                     'color': self.color_palette[len(self.gds_list) % len(self.color_palette)],
-                    'patch': None
+                    'patch': None,
+                    'texts': {}
                 }
                 self.gds_list.append(gds_info)
                 self.listbox.insert(tk.END, f"[{len(self.gds_list)}] {gds_info['name']}")
@@ -217,7 +219,8 @@ class GDSMultiStitcherApp:
             'offset_x': orig['offset_x'] + shift,
             'offset_y': orig['offset_y'] - shift,
             'color': orig['color'],
-            'patch': None
+            'patch': None,
+            'texts': {}
         }
         self.gds_list.append(new_gds)
         self.listbox.insert(tk.END, f"[{len(self.gds_list)}] {new_gds['name']}")
@@ -230,19 +233,16 @@ class GDSMultiStitcherApp:
         self.draw_preview()
 
     def action_rotate_cw(self, idx):
-        # 顺时针旋转90度相当于逆时针旋转270度 (rot=3)
         self.gds_list[idx]['trans'] = db.DTrans(3, False, 0, 0) * self.gds_list[idx]['trans']
         self.status_var.set(f"Rotated 90° CW: {self.gds_list[idx]['name']}")
         self.draw_preview()
 
     def action_flip_horizontal(self, idx):
-        # 左右镜像
         self.gds_list[idx]['trans'] = db.DTrans(2, True, 0, 0) * self.gds_list[idx]['trans']
         self.status_var.set(f"Flipped Left-Right: {self.gds_list[idx]['name']}")
         self.draw_preview()
 
     def action_flip_vertical(self, idx):
-        # 上下镜像：直接沿 X 轴翻转 (rot=0, mirror=True)
         self.gds_list[idx]['trans'] = db.DTrans(0, True, 0, 0) * self.gds_list[idx]['trans']
         self.status_var.set(f"Flipped Top-Bottom: {self.gds_list[idx]['name']}")
         self.draw_preview()
@@ -263,6 +263,7 @@ class GDSMultiStitcherApp:
     def draw_preview(self):
         self.ax.clear()
 
+        # 绘制主背景框 (5000x5000 等)
         rect_block = patches.Rectangle((0, 0), self.block_width, self.block_height,
                                        linewidth=5, edgecolor='black', facecolor='none',
                                        label='_nolegend_', alpha=1.0)
@@ -285,14 +286,71 @@ class GDSMultiStitcherApp:
             start_x = t_box.left + gds['offset_x']
             start_y = t_box.bottom + gds['offset_y']
 
+            # 绘制 GDS 色块
             rect = patches.Rectangle((start_x, start_y), t_box.width(), t_box.height(),
                                      linewidth=2, edgecolor=gds['color'], facecolor=gds['color'],
-                                     alpha=0.3, label=gds['name'])
+                                     alpha=0.3, label=gds['name'], zorder=10)
             self.ax.add_patch(rect)
             gds['patch'] = rect
+            gds['texts'] = {}
+
+            # === 直接取最外侧边缘的中点坐标（不再计算缩进比例） ===
+            bbox = gds['base_bbox']
+            cx = (bbox.left + bbox.right) / 2
+            cy = (bbox.bottom + bbox.top) / 2
+
+            pts = {
+                'N': db.DPoint(cx, bbox.top),
+                'S': db.DPoint(cx, bbox.bottom),
+                'E': db.DPoint(bbox.right, cy),
+                'W': db.DPoint(bbox.left, cy)
+            }
+
+            # 提取最终变换后的色块边界，用于精确判断文字依靠在哪条边
+            box_left = t_box.left + gds['offset_x']
+            box_right = t_box.right + gds['offset_x']
+            box_top = t_box.top + gds['offset_y']
+            box_bottom = t_box.bottom + gds['offset_y']
+
+            # 容差范围处理精度问题
+            tol = min(t_box.width(), t_box.height()) * 0.001
+
+            # === 动态计算字体大小逻辑 ===
+            box_min_edge = min(t_box.width(), t_box.height())
+            canvas_min_edge = min(self.block_width, self.block_height)
+            ratio = box_min_edge / canvas_min_edge if canvas_min_edge > 0 else 1.0
+            dynamic_fontsize = max(4, min(40, int(4 + 10 * ratio)))
+
+            for label, pt in pts.items():
+                t_pt = gds['trans'] * pt
+                world_x = t_pt.x + gds['offset_x']
+                world_y = t_pt.y + gds['offset_y']
+
+                # === 核心：动态判断文本停在哪个边界，设置内向对齐(Alignment) ===
+                ha = 'center'
+                va = 'center'
+
+                # 水平判定：贴在右边 -> 文字靠右对齐（向左延伸） | 贴在左边 -> 文字靠左对齐（向右延伸）
+                if abs(world_x - box_right) < tol:
+                    ha = 'right'
+                elif abs(world_x - box_left) < tol:
+                    ha = 'left'
+
+                # 垂直判定：贴在上边 -> 文字靠上对齐（向下延伸） | 贴在下边 -> 文字靠下对齐（向上延伸）
+                if abs(world_y - box_top) < tol:
+                    va = 'top'
+                elif abs(world_y - box_bottom) < tol:
+                    va = 'bottom'
+
+                # 绘制无边框文字，精准贴边
+                txt = self.ax.text(world_x, world_y, label, ha=ha, va=va,
+                                   color='black', fontweight='bold', fontsize=dynamic_fontsize,
+                                   zorder=100, clip_on=False)
+                gds['texts'][label] = txt
 
         self.ax.autoscale_view()
         self.ax.set_aspect('equal', adjustable='datalim')
+        self.ax.margins(0.15)
 
         handles, labels = self.ax.get_legend_handles_labels()
         if labels:
@@ -309,12 +367,12 @@ class GDSMultiStitcherApp:
             gds = self.gds_list[idx]
             if gds['patch'] and gds['patch'].contains(event)[0]:
 
-                # Right-click (Context Menu)
+                # Right-click
                 if event.button in [2, 3]:
                     self.show_context_menu(idx)
                     return
 
-                # Left-click (Drag)
+                # Left-click
                 elif event.button == 1:
                     self.dragging_idx = idx
                     self.drag_start_x = event.xdata
@@ -341,11 +399,30 @@ class GDSMultiStitcherApp:
 
         gds['patch'].set_x(new_x)
         gds['patch'].set_y(new_y)
-        self.canvas.draw_idle()
 
+        # 更新偏移量
         t_box = gds['trans'] * gds['base_bbox']
         gds['offset_x'] = new_x - t_box.left
         gds['offset_y'] = new_y - t_box.bottom
+
+        # 拖拽时坐标直接采用原始边缘
+        if 'texts' in gds:
+            bbox = gds['base_bbox']
+            cx = (bbox.left + bbox.right) / 2
+            cy = (bbox.bottom + bbox.top) / 2
+
+            pts = {
+                'N': db.DPoint(cx, bbox.top),
+                'S': db.DPoint(cx, bbox.bottom),
+                'E': db.DPoint(bbox.right, cy),
+                'W': db.DPoint(bbox.left, cy)
+            }
+
+            for label, txt in gds['texts'].items():
+                t_pt = gds['trans'] * pts[label]
+                txt.set_position((t_pt.x + gds['offset_x'], t_pt.y + gds['offset_y']))
+
+        self.canvas.draw_idle()
 
     def on_release(self, event):
         if self.dragging_idx != -1:
@@ -356,7 +433,7 @@ class GDSMultiStitcherApp:
             self.ax.autoscale_view()
             self.canvas.draw_idle()
 
-    # ---------------- Export with Instantiation (Fixed Copied Block Bug) ----------------
+    # ---------------- Export with Instantiation ----------------
     def execute_stitch(self):
         if not self.gds_list:
             messagebox.showwarning("Notice", "No GDS files have been added yet!")
@@ -408,5 +485,3 @@ class GDSMultiStitcherApp:
 if __name__ == "__main__":
     app = GDSMultiStitcherApp()
     app.root.mainloop()
-
-
