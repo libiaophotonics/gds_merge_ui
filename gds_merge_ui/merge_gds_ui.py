@@ -520,7 +520,7 @@ class GDSMultiStitcherApp:
             w, h = t_box.width(), t_box.height()
 
             rect = patches.Rectangle((sx, sy), w, h, linewidth=0.5, edgecolor=gds['color'], facecolor=gds['color'],
-                                     alpha=0.2, zorder=10)
+                                     alpha=0.4, zorder=10)
             self.ax.add_patch(rect)
             gds['patch'] = rect
             gds['poly_patches'] = []
@@ -532,7 +532,7 @@ class GDSMultiStitcherApp:
                     transformed_pts.append((t_pt.x + gds['offset_x'], t_pt.y + gds['offset_y']))
 
                 poly_patch = patches.Polygon(transformed_pts, closed=True, fill=False, edgecolor=gds['color'],
-                                             linestyle='--', linewidth=0.8, alpha=0.9, zorder=15)
+                                             linestyle='-', linewidth=0.8, alpha=0.7, zorder=15)
                 self.ax.add_patch(poly_patch)
                 gds['poly_patches'].append((pts, poly_patch))
 
