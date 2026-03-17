@@ -10,6 +10,7 @@ matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.patches as patches
+import matplotlib.colors as mcolors  # 新增：用于处理 RGBA 颜色透明度
 
 import klayout.db as db
 
@@ -698,6 +699,7 @@ class GDSMultiStitcherApp:
             sx, sy = t_box.left + gds['offset_x'], t_box.bottom + gds['offset_y']
             w, h = t_box.width(), t_box.height()
 
+            # 矩形外轮廓保留原本逻辑 (包含 alpha=0.6)
             rect = patches.Rectangle((sx, sy), w, h, linewidth=0.5, edgecolor=gds['color'], facecolor=gds['color'],
                                      alpha=0.6, zorder=10)
             self.ax.add_patch(rect)
@@ -710,8 +712,17 @@ class GDSMultiStitcherApp:
                     t_pt = gds['trans'] * db.DPoint(px, py)
                     transformed_pts.append((t_pt.x + gds['offset_x'], t_pt.y + gds['offset_y']))
 
-                poly_patch = patches.Polygon(transformed_pts, closed=True, fill=False, edgecolor=gds['color'],
-                                             linestyle='-', linewidth=0.8, alpha=0.7, zorder=15)
+                # ===== 修改部分开始 =====
+                # 将颜色转换为 RGBA，分别控制内部填充(facecolor)与轮廓线(edgecolor)的透明度
+                edge_c = mcolors.to_rgba(gds['color'], alpha=0.7)
+                face_c = mcolors.to_rgba('black', alpha=0.3)
+
+                # 内轮廓线用实线(linestyle='-')
+                poly_patch = patches.Polygon(transformed_pts, closed=True, fill=True,
+                                             facecolor=face_c, edgecolor=edge_c,
+                                             linestyle='-', linewidth=0.8, zorder=15)
+                # ===== 修改部分结束 =====
+
                 self.ax.add_patch(poly_patch)
                 gds['poly_patches'].append((pts, poly_patch))
 
@@ -1064,21 +1075,48 @@ class GDSMultiStitcherApp:
         if not self.gds_list: return
         out_p = filedialog.asksaveasfilename(defaultextension=".gds")
         if not out_p: return
+
         try:
-            layout = db.Layout();
-            merged = layout.create_cell(self.top_cell_name_var.get() or "MERGED")
+            # 1. 创建最终要导出的目标 Layout
+            target_layout = db.Layout()
+            merged_top = target_layout.create_cell(self.top_cell_name_var.get() or "MERGED")
             cache = {}
-            for g in self.gds_list:
-                if g['path'] not in cache:
-                    old = [c.cell_index() for c in layout.top_cells()]
-                    layout.read(g['path'])
-                    new = [c for c in layout.top_cells() if c.cell_index() not in old and c.name != merged.name]
-                    if new: cache[g['path']] = new[0].cell_index()
-                merged.insert(db.DCellInstArray(cache[g['path']], db.DTrans(g['offset_x'], g['offset_y']) * g['trans']))
-            layout.write(out_p);
+
+            for idx, g in enumerate(self.gds_list):
+                file_path = g['path']
+
+                if file_path not in cache:
+                    # 2. 将每个GDS读取到【独立】的临时 Layout 中，避免交叉污染和 topological 报错
+                    src_layout = db.Layout()
+                    src_layout.read(file_path)
+
+                    # 继承第一个加载的 GDS 的精度 (DBU)，防止坐标漂移或缩放错误
+                    if idx == 0:
+                        target_layout.dbu = src_layout.dbu
+
+                    src_top = src_layout.top_cells()[0]
+
+                    # 3. 遍历并重命名源 Layout 中的所有 Cell，加上前缀，防止不同 GDS 之间同名子单元冲突
+                    prefix = f"chip{idx}_"
+                    for cell in src_layout.each_cell():
+                        cell.name = prefix + cell.name
+
+                    # 4. 在目标 Layout 中创建一个空 Cell，并将源树整体安全地拷贝过来
+                    new_cell = target_layout.create_cell(src_top.name)
+                    new_cell.copy_tree(src_top)
+
+                    cache[file_path] = new_cell.cell_index()
+
+                # 5. 在总的 MERGED Top cell 中实例化
+                merged_top.insert(
+                    db.DCellInstArray(cache[file_path], db.DTrans(g['offset_x'], g['offset_y']) * g['trans']))
+
+            # 导出最终文件
+            target_layout.write(out_p)
             messagebox.showinfo("OK", "Merged Success!")
+
         except Exception as e:
-            messagebox.showerror("Error", str(e))
+            messagebox.showerror("Error", f"Failed to export merged GDS:\n{str(e)}")
 
 
 if __name__ == "__main__":
