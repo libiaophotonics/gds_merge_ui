@@ -1,5 +1,6 @@
 import os
 import math
+import json
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
@@ -24,7 +25,7 @@ class GDSMultiStitcherApp:
         self.root.title("GDS MERGER 1.0")
 
         window_width = 1150
-        window_height = 820  # 稍微减小了窗口高度，因为对齐面板变小了
+        window_height = 860
         screen_width = self.root.winfo_screenwidth()
         screen_height = self.root.winfo_screenheight()
         x_cordinate = int((screen_width / 2) - (window_width / 2))
@@ -50,6 +51,10 @@ class GDSMultiStitcherApp:
 
         self.measurements = []
 
+        ### 新增：撤销历史栈与拖拽状态标识 ###
+        self.undo_stack = []
+        self.drag_snapshot_taken = False
+
         self.block_width_var = tk.StringVar(value="5000.0")
         self.block_height_var = tk.StringVar(value="5000.0")
         self.block_width = 5000.0
@@ -60,7 +65,6 @@ class GDSMultiStitcherApp:
         self.anchor_var = tk.StringVar(value="Bottom-Left")
         self.anchor_options = ["Bottom-Left", "Bottom-Right", "Top-Left", "Top-Right", "Center"]
 
-        ### 新增：下拉对齐选项的映射字典和状态变量 ###
         self.align_options_map = {
             "⇤ Align Left": "left",
             "⇹ Align Center X": "center_x",
@@ -86,6 +90,16 @@ class GDSMultiStitcherApp:
         left_frame = ttk.Frame(main_frame, width=380)
         left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
         left_frame.pack_propagate(False)
+
+        ### 修改：在工程面板中加入撤销按钮 ###
+        proj_frame = ttk.Frame(left_frame)
+        proj_frame.pack(fill=tk.X, pady=(0, 10))
+        ttk.Button(proj_frame, text="📂 Load", command=self.action_load_project).pack(side=tk.LEFT, fill=tk.X,
+                                                                                     expand=True, padx=(0, 2))
+        ttk.Button(proj_frame, text="💾 Save", command=self.action_save_project).pack(side=tk.LEFT, fill=tk.X,
+                                                                                     expand=True, padx=(2, 2))
+        ttk.Button(proj_frame, text="↩️ Undo", command=self.action_undo).pack(side=tk.LEFT, fill=tk.X, expand=True,
+                                                                              padx=(2, 0))
 
         list_frame = ttk.LabelFrame(left_frame, text="1. GDS File List (Ctrl/Shift to Multi-select)", padding=10)
         list_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
@@ -156,11 +170,12 @@ class GDSMultiStitcherApp:
         align_frame = ttk.LabelFrame(left_frame, text="1d. Align & Distribute (Select Multiple)", padding=10)
         align_frame.pack(fill=tk.X, pady=(0, 10))
 
-        ### 修改：下拉菜单 + 按钮紧凑排布 ###
         ttk.Label(align_frame, text="Align:").grid(row=0, column=0, sticky=tk.W, pady=2)
-        align_cb = ttk.Combobox(align_frame, textvariable=self.align_var, values=list(self.align_options_map.keys()), state="readonly", width=18)
+        align_cb = ttk.Combobox(align_frame, textvariable=self.align_var, values=list(self.align_options_map.keys()),
+                                state="readonly", width=18)
         align_cb.grid(row=0, column=1, sticky=tk.EW, padx=(0, 5), pady=2)
-        ttk.Button(align_frame, text="▶ Execute Align", command=self.execute_align).grid(row=0, column=2, sticky=tk.EW, pady=2)
+        ttk.Button(align_frame, text="▶ Execute Align", command=self.execute_align).grid(row=0, column=2, sticky=tk.EW,
+                                                                                         pady=2)
 
         ttk.Button(align_frame, text="𝌸 Distribute H (Equal Gap)", command=lambda: self.distribute_selected('h')).grid(
             row=1, column=0, columnspan=2, sticky=tk.EW, padx=(0, 2), pady=(10, 2))
@@ -192,6 +207,163 @@ class GDSMultiStitcherApp:
         status_bar = ttk.Label(self.root, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W)
         status_bar.pack(side=tk.BOTTOM, fill=tk.X)
 
+    ### 新增功能：保存当前状态快照 (用于 Undo) ###
+    def save_snapshot(self):
+        snapshot = {
+            'gds_list': [],
+            'measurements': [dict(m) for m in self.measurements]
+        }
+        for gds in self.gds_list:
+            # 使用乘以恒等矩阵的方式安全地深拷贝 KLayout DTrans 对象
+            trans_copy = gds['trans'] * db.DTrans()
+            snap_gds = {
+                'path': gds['path'],
+                'name': gds['name'],
+                'base_bbox': gds['base_bbox'],
+                'trans': trans_copy,
+                'offset_x': gds['offset_x'],
+                'offset_y': gds['offset_y'],
+                'color': gds['color'],
+                'true_polygons': gds['true_polygons']
+            }
+            snapshot['gds_list'].append(snap_gds)
+
+        self.undo_stack.append(snapshot)
+        # 限制撤销步数为最大 30 步，避免内存溢出
+        if len(self.undo_stack) > 30:
+            self.undo_stack.pop(0)
+
+    ### 新增功能：执行撤销 ###
+    def action_undo(self):
+        if not self.undo_stack:
+            self.status_var.set("Nothing to undo.")
+            return
+
+        snapshot = self.undo_stack.pop()
+
+        self.gds_list.clear()
+        self.listbox.delete(0, tk.END)
+
+        for item in snapshot['gds_list']:
+            gds_info = {
+                'path': item['path'],
+                'name': item['name'],
+                'base_bbox': item['base_bbox'],
+                'trans': item['trans'],
+                'offset_x': item['offset_x'],
+                'offset_y': item['offset_y'],
+                'color': item['color'],
+                'patch': None,
+                'center_text': None,
+                'true_polygons': item['true_polygons'],
+                'poly_patches': []
+            }
+            self.gds_list.append(gds_info)
+            self.listbox.insert(tk.END, f"[{len(self.gds_list)}] {item['name']}")
+
+        self.measurements = snapshot.get('measurements', [])
+
+        self.clear_active_measurement()
+        self.draw_preview(reset_view=False)
+        self.status_var.set("Undo successful.")
+
+    def action_save_project(self):
+        if not self.gds_list:
+            messagebox.showinfo("Info", "No GDS loaded. Nothing to save.")
+            return
+
+        filepath = filedialog.asksaveasfilename(defaultextension=".gdsprj",
+                                                filetypes=[("GDS Project", "*.gdsprj"), ("JSON Files", "*.json")])
+        if not filepath:
+            return
+
+        try:
+            project_data = {
+                "block_width": self.block_width,
+                "block_height": self.block_height,
+                "top_cell_name": self.top_cell_name_var.get(),
+                "measurements": self.measurements,
+                "gds_items": []
+            }
+
+            for gds in self.gds_list:
+                item = {
+                    "path": gds["path"],
+                    "name": gds["name"],
+                    "offset_x": gds["offset_x"],
+                    "offset_y": gds["offset_y"],
+                    "color": gds["color"],
+                    "trans_rot": gds["trans"].rot,
+                    "trans_mirror": gds["trans"].is_mirror(),
+                    "trans_dx": gds["trans"].disp.x,
+                    "trans_dy": gds["trans"].disp.y
+                }
+                project_data["gds_items"].append(item)
+
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(project_data, f, indent=4)
+
+            self.status_var.set(f"Project saved to: {os.path.basename(filepath)}")
+            messagebox.showinfo("Success", "Project successfully saved!")
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save project:\n{str(e)}")
+
+    def action_load_project(self):
+        filepath = filedialog.askopenfilename(filetypes=[("GDS Project", "*.gdsprj"), ("JSON Files", "*.json")])
+        if not filepath:
+            return
+
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                project_data = json.load(f)
+
+            # 清理当前状态并清空撤销栈
+            self.gds_list.clear()
+            self.listbox.delete(0, tk.END)
+            self.measurements = project_data.get("measurements", [])
+            self.clear_active_measurement()
+            self.undo_stack.clear()
+
+            self.block_width_var.set(str(project_data.get("block_width", 5000.0)))
+            self.block_height_var.set(str(project_data.get("block_height", 5000.0)))
+            self.top_cell_name_var.set(project_data.get("top_cell_name", "MERGED_CHIP"))
+            self.update_block_size()
+
+            gds_items = project_data.get("gds_items", [])
+            for item in gds_items:
+                path = item.get("path")
+                name = item.get("name")
+
+                if not os.path.exists(path):
+                    messagebox.showwarning("File Missing",
+                                           f"Could not find the GDS file:\n{path}\n\nThis item will be skipped.")
+                    continue
+
+                self.status_var.set(f"Loading {name}... Please wait.")
+                self.root.update()
+
+                base_bbox, true_polygons = self.parse_gds_info(path)
+                trans = db.DTrans(item["trans_rot"], item["trans_mirror"], item["trans_dx"], item["trans_dy"])
+
+                gds_info = {
+                    'path': path, 'name': name,
+                    'base_bbox': base_bbox, 'trans': trans,
+                    'offset_x': item["offset_x"], 'offset_y': item["offset_y"],
+                    'color': item["color"],
+                    'patch': None, 'center_text': None,
+                    'true_polygons': true_polygons,
+                    'poly_patches': []
+                }
+                self.gds_list.append(gds_info)
+                self.listbox.insert(tk.END, f"[{len(self.gds_list)}] {name}")
+
+            self.draw_preview(reset_view=True)
+            self.status_var.set(f"Project loaded from: {os.path.basename(filepath)}")
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load project:\n{str(e)}")
+
     def update_canvas_selection(self):
         selected_indices = self.listbox.curselection()
         for i, gds in enumerate(self.gds_list):
@@ -212,7 +384,6 @@ class GDSMultiStitcherApp:
         t = t_box.top + gds['offset_y']
         return l, r, b, t
 
-    ### 新增：解析下拉框选择并调用对齐功能 ###
     def execute_align(self):
         selected_option = self.align_var.get()
         mode = self.align_options_map.get(selected_option)
@@ -225,6 +396,7 @@ class GDSMultiStitcherApp:
             messagebox.showwarning("Warning", "Please select at least 2 GDS files (Ctrl/Shift + Click) to align.")
             return
 
+        self.save_snapshot()  ### 插入快照 ###
         bboxes = [self.get_bbox(self.gds_list[i]) for i in selection]
 
         if mode == 'left':
@@ -270,6 +442,7 @@ class GDSMultiStitcherApp:
             messagebox.showwarning("Warning", "Please select at least 3 GDS files to distribute evenly.")
             return
 
+        self.save_snapshot()  ### 插入快照 ###
         items = []
         for i in selection:
             gds = self.gds_list[i]
@@ -315,6 +488,7 @@ class GDSMultiStitcherApp:
             self.canvas.draw_idle()
 
     def action_clear_measurements(self):
+        self.save_snapshot()  ### 插入快照 ###
         self.measurements.clear()
         self.clear_active_measurement()
         self.draw_preview(reset_view=False)
@@ -400,6 +574,8 @@ class GDSMultiStitcherApp:
         if not selection:
             messagebox.showwarning("Warning", "Please select a GDS from the list first.")
             return
+
+        self.save_snapshot()  ### 插入快照 ###
         idx = selection[0]
         try:
             new_x = float(self.selected_x_var.get())
@@ -447,6 +623,8 @@ class GDSMultiStitcherApp:
         paths = filedialog.askopenfilenames(filetypes=[("GDS Files", "*.gds")])
         for p in paths:
             try:
+                self.save_snapshot()  ### 插入快照 ###
+
                 base_name = os.path.splitext(os.path.basename(p))[0]
                 self.status_var.set(f"Parsing true contour for {base_name}... Please wait.")
                 self.root.update()
@@ -472,6 +650,7 @@ class GDSMultiStitcherApp:
     def action_delete_selected(self):
         selection = self.listbox.curselection()
         if selection:
+            self.save_snapshot()  ### 插入快照 ###
             for idx in sorted(selection, reverse=True):
                 del self.gds_list[idx]
             self.listbox.delete(0, tk.END)
@@ -520,7 +699,7 @@ class GDSMultiStitcherApp:
             w, h = t_box.width(), t_box.height()
 
             rect = patches.Rectangle((sx, sy), w, h, linewidth=0.5, edgecolor=gds['color'], facecolor=gds['color'],
-                                     alpha=0.4, zorder=10)
+                                     alpha=0.6, zorder=10)
             self.ax.add_patch(rect)
             gds['patch'] = rect
             gds['poly_patches'] = []
@@ -636,6 +815,7 @@ class GDSMultiStitcherApp:
                                                     markeredgewidth=2, zorder=305)
                 self.measure_state = 1
             elif self.measure_state == 1:
+                self.save_snapshot()  ### 插入快照：记录绘制测量线前的状态 ###
                 x0, y0 = self.measure_start_pt
                 self.measurements.append({'x0': x0, 'y0': y0, 'x1': snap_x, 'y1': snap_y})
 
@@ -729,6 +909,11 @@ class GDSMultiStitcherApp:
 
         if self.dragging_idx == -1: return
 
+        ### 插入快照：只在拖拽“开始发生的第一帧”保存一次状态，避免历史栈被塞满 ###
+        if not self.drag_snapshot_taken:
+            self.save_snapshot()
+            self.drag_snapshot_taken = True
+
         for line in self.guide_lines: line.remove()
         self.guide_lines.clear()
 
@@ -815,6 +1000,7 @@ class GDSMultiStitcherApp:
 
         if self.dragging_idx != -1:
             self.dragging_idx = -1
+            self.drag_snapshot_taken = False  ### 重置拖拽快照标识 ###
             self.drag_start_offsets.clear()
             for line in self.guide_lines: line.remove()
             self.guide_lines.clear()
@@ -832,6 +1018,7 @@ class GDSMultiStitcherApp:
         menu.post(int(self.root.winfo_pointerx()), int(self.root.winfo_pointery()))
 
     def action_duplicate(self, idx):
+        self.save_snapshot()  ### 插入快照 ###
         o = self.gds_list[idx]
         new_gds = {
             'path': o['path'], 'name': o['name'],
@@ -846,24 +1033,28 @@ class GDSMultiStitcherApp:
         self.draw_preview()
 
     def action_rotate_ccw(self, i):
+        self.save_snapshot()  ### 插入快照 ###
         self.gds_list[i]['trans'] = db.DTrans(1, False, 0, 0) * self.gds_list[i][
             'trans'];
         self.draw_preview();
         self.on_listbox_select()
 
     def action_rotate_cw(self, i):
+        self.save_snapshot()  ### 插入快照 ###
         self.gds_list[i]['trans'] = db.DTrans(3, False, 0, 0) * self.gds_list[i][
             'trans'];
         self.draw_preview();
         self.on_listbox_select()
 
     def action_flip_horizontal(self, i):
+        self.save_snapshot()  ### 插入快照 ###
         self.gds_list[i]['trans'] = db.DTrans(2, True, 0, 0) * self.gds_list[i][
             'trans'];
         self.draw_preview();
         self.on_listbox_select()
 
     def action_flip_vertical(self, i):
+        self.save_snapshot()  ### 插入快照 ###
         self.gds_list[i]['trans'] = db.DTrans(0, True, 0, 0) * self.gds_list[i][
             'trans'];
         self.draw_preview();
