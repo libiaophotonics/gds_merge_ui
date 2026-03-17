@@ -23,7 +23,7 @@ plt.rcParams['axes.unicode_minus'] = False
 class GDSMultiStitcherApp:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("GDS MERGER 1.0 - Advanced")
+        self.root.title("GDS MERGER 1.0 - Pro Performance")
 
         window_width = 1180
         window_height = 880
@@ -76,12 +76,15 @@ class GDSMultiStitcherApp:
         }
         self.align_var = tk.StringVar(value="⇤ Align Left")
 
-        # --- 新增：功能变量初始化 ---
+        # --- 新增：性能优化与功能变量 ---
         self.show_overlap_var = tk.BooleanVar(value=True)
         self.overlap_patches = []
 
         self.grid_snap_var = tk.BooleanVar(value=False)
         self.grid_size_var = tk.StringVar(value="10.0")
+
+        # 默认开启 BBox 模式（仅显示边框），大幅提升大文件渲染性能
+        self.bbox_only_var = tk.BooleanVar(value=True)
         # ----------------------------
 
         self.top_cell_name_var = tk.StringVar(value="MERGED_CHIP")
@@ -196,9 +199,13 @@ class GDSMultiStitcherApp:
 
         ttk.Separator(canvas_toolbar_1, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=4, pady=2)
 
-        # 新增：重叠检测开关
+        # 重叠检测与 BBox 模式
         ttk.Checkbutton(canvas_toolbar_1, text="🔴 Overlaps Check", style="Toolbutton", variable=self.show_overlap_var,
                         command=self.on_overlap_toggle).pack(side=tk.LEFT, padx=2)
+
+        # --- 新增：BBox 渲染模式切换按钮 ---
+        ttk.Checkbutton(canvas_toolbar_1, text="🔲 BBox Only", style="Toolbutton", variable=self.bbox_only_var,
+                        command=self.on_bbox_toggle).pack(side=tk.LEFT, padx=2)
 
         canvas_toolbar_2 = ttk.Frame(right_frame)
         canvas_toolbar_2.pack(side=tk.TOP, fill=tk.X, pady=(2, 5))
@@ -212,7 +219,7 @@ class GDSMultiStitcherApp:
 
         ttk.Separator(canvas_toolbar_2, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=4, pady=2)
 
-        # 新增：网格绝对吸附开关及设置
+        # 网格绝对吸附开关及设置
         ttk.Checkbutton(canvas_toolbar_2, text="🌐 Grid Snap", style="Toolbutton", variable=self.grid_snap_var).pack(
             side=tk.LEFT, padx=2)
         ttk.Label(canvas_toolbar_2, text="Size(um):").pack(side=tk.LEFT, padx=(2, 2))
@@ -235,7 +242,15 @@ class GDSMultiStitcherApp:
         status_bar = ttk.Label(self.root, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W)
         status_bar.pack(side=tk.BOTTOM, fill=tk.X)
 
-    # --- 核心新增：绘制重叠区域检测 ---
+    # --- 性能优化：BBox 模式切换触发器 ---
+    def on_bbox_toggle(self):
+        if self.bbox_only_var.get():
+            self.status_var.set("Performance Mode: ON (Showing Bounding Boxes only).")
+        else:
+            self.status_var.set("Performance Mode: OFF (Rendering full polygon contours... this may take a while).")
+        # 触发全局重绘
+        self.draw_preview(reset_view=False)
+
     def draw_overlaps(self):
         for p in getattr(self, 'overlap_patches', []):
             try:
@@ -248,13 +263,12 @@ class GDSMultiStitcherApp:
             return
 
         n = len(self.gds_list)
-        tol = 1e-5  # 容差，避免完美拼接时的浮点误判
+        tol = 1e-5
         for i in range(n):
             for j in range(i + 1, n):
                 l1, r1, b1, t1 = self.get_bbox(self.gds_list[i])
                 l2, r2, b2, t2 = self.get_bbox(self.gds_list[j])
 
-                # 严格相交判定
                 if (l1 < r2 - tol) and (r1 > l2 + tol) and (b1 < t2 - tol) and (t1 > b2 + tol):
                     il = max(l1, l2)
                     ir = min(r1, r2)
@@ -271,7 +285,6 @@ class GDSMultiStitcherApp:
         self.draw_overlaps()
         self.canvas.draw_idle()
 
-    # --- 其他原有功能 ---
     def save_snapshot(self):
         snapshot = {
             'gds_list': [],
@@ -661,18 +674,22 @@ class GDSMultiStitcherApp:
             gds['patch'] = rect
             gds['poly_patches'] = []
 
-            for pts in gds['true_polygons']:
-                transformed_pts = []
-                for px, py in pts:
-                    t_pt = gds['trans'] * db.DPoint(px, py)
-                    transformed_pts.append((t_pt.x + gds['offset_x'], t_pt.y + gds['offset_y']))
+            # --- 核心性能优化判定 ---
+            # 只有当 bbox_only_var 为 False 时，才执行耗时的多边形渲染
+            if not self.bbox_only_var.get():
+                for pts in gds['true_polygons']:
+                    transformed_pts = []
+                    for px, py in pts:
+                        t_pt = gds['trans'] * db.DPoint(px, py)
+                        transformed_pts.append((t_pt.x + gds['offset_x'], t_pt.y + gds['offset_y']))
 
-                edge_c = mcolors.to_rgba(gds['color'], alpha=0.7)
-                face_c = mcolors.to_rgba('black', alpha=0.3)
-                poly_patch = patches.Polygon(transformed_pts, closed=True, fill=True, facecolor=face_c,
-                                             edgecolor=edge_c, linestyle='-', linewidth=0.8, zorder=15)
-                self.ax.add_patch(poly_patch)
-                gds['poly_patches'].append((pts, poly_patch))
+                    edge_c = mcolors.to_rgba(gds['color'], alpha=0.7)
+                    face_c = mcolors.to_rgba('black', alpha=0.3)
+                    poly_patch = patches.Polygon(transformed_pts, closed=True, fill=True, facecolor=face_c,
+                                                 edgecolor=edge_c, linestyle='-', linewidth=0.8, zorder=15)
+                    self.ax.add_patch(poly_patch)
+                    gds['poly_patches'].append((pts, poly_patch))
+            # ------------------------
 
             box_min = min(w, h)
             ratio = box_min / min(self.block_width, self.block_height) if min(self.block_width,
@@ -702,9 +719,7 @@ class GDSMultiStitcherApp:
         self.ax.set_aspect('equal', adjustable='datalim')
         self.ax.grid(True, linestyle='-', color=grid_color, alpha=grid_alpha)
 
-        # --- 新增：画图周期内执行重叠检测 ---
         self.draw_overlaps()
-
         self.canvas.draw()
 
     def on_scroll(self, event):
@@ -862,7 +877,6 @@ class GDSMultiStitcherApp:
         best_snap_x, best_snap_y = None, None
         is_grid_snapped = False
 
-        # --- 新增：网格绝对吸附判断 ---
         if self.grid_snap_var.get():
             try:
                 g_size = float(self.grid_size_var.get())
@@ -870,11 +884,9 @@ class GDSMultiStitcherApp:
                     anchor = self.anchor_var.get()
                     curr_x, curr_y = self.get_anchor_coords(handle_gds, anchor, temp_ox=temp_ox, temp_oy=temp_oy)
 
-                    # 取整到最近的网格倍数
                     snap_x = round(curr_x / g_size) * g_size
                     snap_y = round(curr_y / g_size) * g_size
 
-                    # 反推偏移量
                     if anchor == "Bottom-Left":
                         temp_ox, temp_oy = snap_x - t_box.left, snap_y - t_box.bottom
                     elif anchor == "Bottom-Right":
@@ -891,7 +903,6 @@ class GDSMultiStitcherApp:
             except ValueError:
                 pass
 
-        # 若未开启网格吸附，则执行对象边缘对齐吸附
         if not is_grid_snapped:
             cur_xlim = self.ax.get_xlim()
             cur_ylim = self.ax.get_ylim()
@@ -930,6 +941,7 @@ class GDSMultiStitcherApp:
             gds['patch'].set_x(nx_final)
             gds['patch'].set_y(ny_final)
 
+            # 只有当多边形存在（即未开启 BBox Only）时，才会更新多边形的位置，否则直接略过，非常省算力
             for pts, poly_patch in gds['poly_patches']:
                 new_transformed_pts = []
                 for px, py in pts:
@@ -953,9 +965,7 @@ class GDSMultiStitcherApp:
             self.selected_x_var.set(f"{x:.3f}")
             self.selected_y_var.set(f"{y:.3f}")
 
-        # --- 新增：拖拽过程中实时重叠计算 ---
         self.draw_overlaps()
-
         self.canvas.draw_idle()
 
     def on_release(self, event):
@@ -972,8 +982,7 @@ class GDSMultiStitcherApp:
     def show_context_menu(self, idx):
         menu = tk.Menu(self.root, tearoff=0)
         menu.add_command(label=f"Duplicate {self.gds_list[idx]['name']}", command=lambda: self.action_duplicate(idx))
-        menu.add_command(label="Create Array (Step & Repeat)...",
-                         command=lambda: self.action_create_array(idx))  # 新增阵列复制
+        menu.add_command(label="Create Array (Step & Repeat)...", command=lambda: self.action_create_array(idx))
         menu.add_separator()
         menu.add_command(label="Rotate 90 CCW", command=lambda: self.action_rotate_ccw(idx))
         menu.add_command(label="Rotate 90 CW", command=lambda: self.action_rotate_cw(idx))
@@ -995,7 +1004,6 @@ class GDSMultiStitcherApp:
         self.listbox.insert(tk.END, f"[{len(self.gds_list)}] {o['name']}")
         self.draw_preview()
 
-    # --- 核心新增：阵列复制 (Step and Repeat) ---
     def action_create_array(self, idx):
         dialog = tk.Toplevel(self.root)
         dialog.title("Create Array (Step & Repeat)")
@@ -1035,9 +1043,7 @@ class GDSMultiStitcherApp:
 
                 for r in range(rows):
                     for c in range(cols):
-                        if r == 0 and c == 0:
-                            continue  # 跳过原始文件本身
-
+                        if r == 0 and c == 0: continue
                         new_gds = {
                             'path': o['path'], 'name': f"{o['name']}_R{r}C{c}",
                             'base_bbox': o['base_bbox'], 'trans': o['trans'] * db.DTrans(),
@@ -1056,8 +1062,6 @@ class GDSMultiStitcherApp:
                 messagebox.showerror("Error", "Please enter valid numeric values.")
 
         ttk.Button(dialog, text="Generate Array", command=on_ok).grid(row=4, column=0, columnspan=2, pady=15)
-
-    # ---------------------------------------------
 
     def action_rotate_ccw(self, i):
         self.save_snapshot()
