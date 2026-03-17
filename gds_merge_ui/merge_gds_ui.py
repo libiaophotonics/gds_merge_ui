@@ -314,7 +314,7 @@ class GDSMultiStitcherApp:
                     'base_bbox': base_bbox, 'trans': db.DTrans(),
                     'offset_x': 0.0, 'offset_y': 0.0,
                     'color': self.color_palette[len(self.gds_list) % len(self.color_palette)],
-                    'patch': None, 'texts': {}, 'center_text': None,
+                    'patch': None, 'center_text': None,
                     'true_polygons': true_polygons,
                     'poly_patches': []
                 }
@@ -366,12 +366,10 @@ class GDSMultiStitcherApp:
             sx, sy = t_box.left + gds['offset_x'], t_box.bottom + gds['offset_y']
             w, h = t_box.width(), t_box.height()
 
-            ### 修改的部分：矩形轮廓的透明度调高，从 0.08 改为 0.2 ###
             rect = patches.Rectangle((sx, sy), w, h, linewidth=0.5, edgecolor=gds['color'], facecolor=gds['color'],
                                      alpha=0.2, zorder=10)
             self.ax.add_patch(rect)
             gds['patch'] = rect
-            gds['texts'] = {}
             gds['poly_patches'] = []
 
             for pts in gds['true_polygons']:
@@ -380,9 +378,8 @@ class GDSMultiStitcherApp:
                     t_pt = gds['trans'] * db.DPoint(px, py)
                     transformed_pts.append((t_pt.x + gds['offset_x'], t_pt.y + gds['offset_y']))
 
-                ### 修改的部分：真实多边形的 linewidth 变细，从 1.5 改为 0.8 ###
                 poly_patch = patches.Polygon(transformed_pts, closed=True, fill=False, edgecolor=gds['color'],
-                                             linestyle='-', linewidth=0.8, alpha=0.7, zorder=15)
+                                             linestyle='--', linewidth=0.8, alpha=0.9, zorder=15)
                 self.ax.add_patch(poly_patch)
                 gds['poly_patches'].append((pts, poly_patch))
 
@@ -391,25 +388,7 @@ class GDSMultiStitcherApp:
                                                                               self.block_height) > 0 else 1.0
             dynamic_fs = max(6, min(35, int(6 + 18 * ratio)))
 
-            bbox = gds['base_bbox']
-            cx_l, cy_l = (bbox.left + bbox.right) / 2, (bbox.bottom + bbox.top) / 2
-            pts = {'N': (cx_l, bbox.top), 'S': (cx_l, bbox.bottom), 'E': (bbox.right, cy_l), 'W': (bbox.left, cy_l)}
-
-            for label, pt_coords in pts.items():
-                t_pt = gds['trans'] * db.DPoint(*pt_coords)
-                wx, wy = t_pt.x + gds['offset_x'], t_pt.y + gds['offset_y']
-                ha, va = 'center', 'center'
-                if abs(wx - (sx + w)) < box_min * 0.01:
-                    ha = 'right'
-                elif abs(wx - sx) < box_min * 0.01:
-                    ha = 'left'
-                if abs(wy - (sy + h)) < box_min * 0.01:
-                    va = 'top'
-                elif abs(wy - sy) < box_min * 0.01:
-                    va = 'bottom'
-                gds['texts'][label] = self.ax.text(wx, wy, label, ha=ha, va=va, fontsize=dynamic_fs, fontweight='bold',
-                                                   zorder=100)
-
+            # 只保留了中心文件名的文字显示
             gds['center_text'] = self.ax.text(sx + w / 2, sy + h / 2, gds['name'], ha='center', va='center',
                                               fontsize=dynamic_fs, color='black', fontweight='bold', alpha=0.7,
                                               zorder=90)
@@ -622,12 +601,6 @@ class GDSMultiStitcherApp:
                 new_transformed_pts.append((t_pt.x + final_ox, t_pt.y + final_oy))
             poly_patch.set_xy(new_transformed_pts)
 
-        bbox = gds['base_bbox']
-        pts = {'N': ((bbox.left + bbox.right) / 2, bbox.top), 'S': ((bbox.left + bbox.right) / 2, bbox.bottom),
-               'E': (bbox.right, (bbox.top + bbox.bottom) / 2), 'W': (bbox.left, (bbox.top + bbox.bottom) / 2)}
-        for label, txt in gds['texts'].items():
-            t_pt = gds['trans'] * db.DPoint(*pts[label])
-            txt.set_position((t_pt.x + final_ox, t_pt.y + final_oy))
         if gds['center_text']: gds['center_text'].set_position(
             (nx_final + t_box.width() / 2, ny_final + t_box.height() / 2))
 
@@ -650,7 +623,6 @@ class GDSMultiStitcherApp:
             return
 
         if self.dragging_idx != -1:
-            ### 修改的部分：拖拽松开后，透明度恢复到 0.2 ###
             self.gds_list[self.dragging_idx]['patch'].set_alpha(0.2)
             self.dragging_idx = -1
             for line in self.guide_lines: line.remove()
@@ -673,7 +645,7 @@ class GDSMultiStitcherApp:
             'path': o['path'], 'name': o['name'],
             'base_bbox': o['base_bbox'], 'trans': o['trans'] * db.DTrans(),
             'offset_x': o['offset_x'] + 200, 'offset_y': o['offset_y'] - 200,
-            'color': o['color'], 'patch': None, 'texts': {}, 'center_text': None,
+            'color': o['color'], 'patch': None, 'center_text': None,
             'true_polygons': o['true_polygons'],
             'poly_patches': []
         }
