@@ -24,7 +24,7 @@ class GDSMultiStitcherApp:
         self.root.title("GDS MERGER 1.0")
 
         window_width = 1150
-        window_height = 860
+        window_height = 820  # 稍微减小了窗口高度，因为对齐面板变小了
         screen_width = self.root.winfo_screenwidth()
         screen_height = self.root.winfo_screenheight()
         x_cordinate = int((screen_width / 2) - (window_width / 2))
@@ -38,9 +38,7 @@ class GDSMultiStitcherApp:
         self.rect_start_x = 0
         self.rect_start_y = 0
 
-        ### 新增：用于记录编组拖拽时所有选中项的初始坐标 ###
         self.drag_start_offsets = {}
-
         self.guide_lines = []
 
         self.measure_mode_var = tk.BooleanVar(value=False)
@@ -61,6 +59,17 @@ class GDSMultiStitcherApp:
         self.selected_y_var = tk.StringVar(value="0.0")
         self.anchor_var = tk.StringVar(value="Bottom-Left")
         self.anchor_options = ["Bottom-Left", "Bottom-Right", "Top-Left", "Top-Right", "Center"]
+
+        ### 新增：下拉对齐选项的映射字典和状态变量 ###
+        self.align_options_map = {
+            "⇤ Align Left": "left",
+            "⇹ Align Center X": "center_x",
+            "⇥ Align Right": "right",
+            "⇡ Align Top": "top",
+            "↕ Align Center Y": "center_y",
+            "⇣ Align Bottom": "bottom"
+        }
+        self.align_var = tk.StringVar(value="⇤ Align Left")
 
         self.top_cell_name_var = tk.StringVar(value="MERGED_CHIP")
         self.status_var = tk.StringVar(value="Ready: Please add GDS files.")
@@ -147,44 +156,18 @@ class GDSMultiStitcherApp:
         align_frame = ttk.LabelFrame(left_frame, text="1d. Align & Distribute (Select Multiple)", padding=10)
         align_frame.pack(fill=tk.X, pady=(0, 10))
 
-        ttk.Button(align_frame, text="⇤ Align Left", command=lambda: self.align_selected('left')).grid(row=0, column=0,
-                                                                                                       sticky=tk.EW,
-                                                                                                       padx=2, pady=2)
-        ttk.Button(align_frame, text="⇹ Align Center X", command=lambda: self.align_selected('center_x')).grid(row=0,
-                                                                                                               column=1,
-                                                                                                               sticky=tk.EW,
-                                                                                                               padx=2,
-                                                                                                               pady=2)
-        ttk.Button(align_frame, text="⇥ Align Right", command=lambda: self.align_selected('right')).grid(row=0,
-                                                                                                         column=2,
-                                                                                                         sticky=tk.EW,
-                                                                                                         padx=2, pady=2)
-
-        ttk.Button(align_frame, text="⇡ Align Top", command=lambda: self.align_selected('top')).grid(row=1, column=0,
-                                                                                                     sticky=tk.EW,
-                                                                                                     padx=2, pady=2)
-        ttk.Button(align_frame, text="↕ Align Center Y", command=lambda: self.align_selected('center_y')).grid(row=1,
-                                                                                                               column=1,
-                                                                                                               sticky=tk.EW,
-                                                                                                               padx=2,
-                                                                                                               pady=2)
-        ttk.Button(align_frame, text="⇣ Align Bottom", command=lambda: self.align_selected('bottom')).grid(row=1,
-                                                                                                           column=2,
-                                                                                                           sticky=tk.EW,
-                                                                                                           padx=2,
-                                                                                                           pady=2)
+        ### 修改：下拉菜单 + 按钮紧凑排布 ###
+        ttk.Label(align_frame, text="Align:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        align_cb = ttk.Combobox(align_frame, textvariable=self.align_var, values=list(self.align_options_map.keys()), state="readonly", width=18)
+        align_cb.grid(row=0, column=1, sticky=tk.EW, padx=(0, 5), pady=2)
+        ttk.Button(align_frame, text="▶ Execute Align", command=self.execute_align).grid(row=0, column=2, sticky=tk.EW, pady=2)
 
         ttk.Button(align_frame, text="𝌸 Distribute H (Equal Gap)", command=lambda: self.distribute_selected('h')).grid(
-            row=2, column=0, columnspan=2, sticky=tk.EW, padx=2, pady=2)
-        ttk.Button(align_frame, text="𝌆 Distribute V", command=lambda: self.distribute_selected('v')).grid(row=2,
-                                                                                                           column=2,
-                                                                                                           columnspan=1,
-                                                                                                           sticky=tk.EW,
-                                                                                                           padx=2,
-                                                                                                           pady=2)
+            row=1, column=0, columnspan=2, sticky=tk.EW, padx=(0, 2), pady=(10, 2))
+        ttk.Button(align_frame, text="𝌆 Distribute V", command=lambda: self.distribute_selected('v')).grid(
+            row=1, column=2, columnspan=1, sticky=tk.EW, padx=(2, 0), pady=(10, 2))
 
-        for i in range(3):
-            align_frame.columnconfigure(i, weight=1)
+        align_frame.columnconfigure(1, weight=1)
 
         output_frame = ttk.LabelFrame(left_frame, text="2. Export Settings", padding=10)
         output_frame.pack(fill=tk.X, pady=(0, 10))
@@ -209,14 +192,13 @@ class GDSMultiStitcherApp:
         status_bar = ttk.Label(self.root, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W)
         status_bar.pack(side=tk.BOTTOM, fill=tk.X)
 
-    ### 新增：高亮显示被选中的 GDS ###
     def update_canvas_selection(self):
         selected_indices = self.listbox.curselection()
         for i, gds in enumerate(self.gds_list):
             if gds['patch']:
                 if i in selected_indices:
-                    gds['patch'].set_alpha(0.6)  # 选中时背景变深
-                    gds['patch'].set_linewidth(2.0)  # 选中时边框加粗
+                    gds['patch'].set_alpha(0.6)
+                    gds['patch'].set_linewidth(2.0)
                 else:
                     gds['patch'].set_alpha(0.2)
                     gds['patch'].set_linewidth(0.5)
@@ -229,6 +211,13 @@ class GDSMultiStitcherApp:
         b = t_box.bottom + gds['offset_y']
         t = t_box.top + gds['offset_y']
         return l, r, b, t
+
+    ### 新增：解析下拉框选择并调用对齐功能 ###
+    def execute_align(self):
+        selected_option = self.align_var.get()
+        mode = self.align_options_map.get(selected_option)
+        if mode:
+            self.align_selected(mode)
 
     def align_selected(self, mode):
         selection = self.listbox.curselection()
@@ -531,7 +520,7 @@ class GDSMultiStitcherApp:
             w, h = t_box.width(), t_box.height()
 
             rect = patches.Rectangle((sx, sy), w, h, linewidth=0.5, edgecolor=gds['color'], facecolor=gds['color'],
-                                     alpha=0.4, zorder=10)
+                                     alpha=0.2, zorder=10)
             self.ax.add_patch(rect)
             gds['patch'] = rect
             gds['poly_patches'] = []
@@ -543,7 +532,7 @@ class GDSMultiStitcherApp:
                     transformed_pts.append((t_pt.x + gds['offset_x'], t_pt.y + gds['offset_y']))
 
                 poly_patch = patches.Polygon(transformed_pts, closed=True, fill=False, edgecolor=gds['color'],
-                                             linestyle='-', linewidth=0.8, alpha=0.8, zorder=15)
+                                             linestyle='--', linewidth=0.8, alpha=0.9, zorder=15)
                 self.ax.add_patch(poly_patch)
                 gds['poly_patches'].append((pts, poly_patch))
 
@@ -663,7 +652,6 @@ class GDSMultiStitcherApp:
         for line in self.guide_lines: line.remove()
         self.guide_lines.clear()
 
-        ### 编组/多选相关的修改：检测鼠标点击了哪个图块 ###
         clicked_idx = -1
         for i in range(len(self.gds_list) - 1, -1, -1):
             if self.gds_list[i]['patch'].contains(event)[0]:
@@ -683,20 +671,16 @@ class GDSMultiStitcherApp:
 
                 current_selection = list(self.listbox.curselection())
 
-                # 如果按下了 Ctrl 键，则执行追加/移除选择
                 if event.key in ['control', 'ctrl']:
                     if clicked_idx in current_selection:
                         self.listbox.selection_clear(clicked_idx)
                     else:
                         self.listbox.selection_set(clicked_idx)
                 else:
-                    # 没有按下 Ctrl，如果点中的不在已有选区内，就清空其他选中项，只选中它
                     if clicked_idx not in current_selection:
                         self.listbox.selection_clear(0, tk.END)
                         self.listbox.selection_set(clicked_idx)
-                    # 如果点中的本身就在选区内，说明用户想拖动整个选区，不清除
 
-                # 记录所有被选中图块的初始偏移量，用于集体拖动
                 new_selection = self.listbox.curselection()
                 self.drag_start_offsets = {}
                 for idx in new_selection:
@@ -705,7 +689,6 @@ class GDSMultiStitcherApp:
                 self.on_listbox_select()
                 return
         else:
-            # 点击了空白处，清空选区
             if event.button == 1 and event.key not in ['control', 'ctrl']:
                 self.listbox.selection_clear(0, tk.END)
                 self.update_canvas_selection()
@@ -749,7 +732,6 @@ class GDSMultiStitcherApp:
         for line in self.guide_lines: line.remove()
         self.guide_lines.clear()
 
-        ### 编组/多选相关的修改：以鼠标点中的那个图块为“基准抓手”来计算吸附 ###
         handle_gds = self.gds_list[self.dragging_idx]
         t_box = handle_gds['trans'] * handle_gds['base_bbox']
 
@@ -772,7 +754,6 @@ class GDSMultiStitcherApp:
         snap_shift_x = 0
         snap_shift_y = 0
 
-        # 防自我吸附：编组在拖拽时，只能吸附原地没动的图块
         for i, other_gds in enumerate(self.gds_list):
             if i in self.drag_start_offsets: continue
 
@@ -789,11 +770,9 @@ class GDSMultiStitcherApp:
         final_ox = temp_ox + snap_shift_x
         final_oy = temp_oy + snap_shift_y
 
-        # 计算出拖拽带来的实际整体位移 (Delta)
         delta_x = final_ox - self.drag_start_offsets[self.dragging_idx][0]
         delta_y = final_oy - self.drag_start_offsets[self.dragging_idx][1]
 
-        # 把 Delta 应用到所有被选中的图块上，实现“编组齐飞”
         for idx in self.drag_start_offsets:
             gds = self.gds_list[idx]
             new_ox = self.drag_start_offsets[idx][0] + delta_x
@@ -839,7 +818,7 @@ class GDSMultiStitcherApp:
             self.drag_start_offsets.clear()
             for line in self.guide_lines: line.remove()
             self.guide_lines.clear()
-            self.update_canvas_selection()  # 松开后保持高亮选中状态
+            self.update_canvas_selection()
             self.canvas.draw_idle()
 
     def show_context_menu(self, idx):
