@@ -4,6 +4,7 @@ import subprocess
 
 
 def main():
+    # ⚠️ 确保你刚才写的带有 UI 的主程序文件名为 "merge_gds_ui.py"
     target_script = "merge_gds_ui.py"
     app_name = "GDS_MERGER_1.0"
     icon_png = "icon.png"
@@ -68,10 +69,11 @@ def main():
         target_script,
         f'--name={app_name}',           # 生成的 exe 名字
         '--onefile',                    # 将所有依赖打包进一个单一的 .exe 文件中
-        '--windowed',                   # 运行时不显示黑色的控制台/命令行窗口
+        '--windowed',                   # 运行时不显示黑色的控制台/命令行窗口 (注：如果生成的exe运行无反应，可改成 '--console' 看报错)
         '--clean',                      # 每次打包前清理之前的缓存
         '--hidden-import=klayout.db',   # 隐式导入 klayout 模块
-        '--collect-all=klayout',        # 👈 【核心修复】强制收集 klayout 底层的所有 C++ 动态库和插件！
+        '--collect-all=klayout',        # 强制收集 klayout 底层的所有 C++ 动态库和插件
+        '--collect-all=matplotlib',     # 👈 【核心新增】强制收集 matplotlib 的画图引擎、字体和后端组件，防止 UI 闪退！
         '--log-level=WARN',             # 只输出警告和错误信息，保持终端清爽
     ]
 

@@ -38,6 +38,9 @@ class GDSMultiStitcherApp:
         self.rect_start_x = 0
         self.rect_start_y = 0
 
+        ### 新增：用于记录编组拖拽时所有选中项的初始坐标 ###
+        self.drag_start_offsets = {}
+
         self.guide_lines = []
 
         self.measure_mode_var = tk.BooleanVar(value=False)
@@ -100,7 +103,7 @@ class GDSMultiStitcherApp:
         block_settings_frame = ttk.LabelFrame(left_frame, text="1b. Block Size & Zoom Settings", padding=10)
         block_settings_frame.pack(fill=tk.X, pady=(0, 10))
 
-        ttk.Label(block_settings_frame, text="Block Width/Height (μm):").pack(anchor=tk.W)
+        ttk.Label(block_settings_frame, text="Block Width/Height (um):").pack(anchor=tk.W)
         entry_f = ttk.Frame(block_settings_frame)
         entry_f.pack(fill=tk.X)
         ttk.Entry(entry_f, textvariable=self.block_width_var, width=10).pack(side=tk.LEFT, fill=tk.X, expand=True)
@@ -121,7 +124,7 @@ class GDSMultiStitcherApp:
         ttk.Button(btn_f2, text="🗑️ Clear", command=self.action_clear_measurements).pack(side=tk.LEFT, fill=tk.X,
                                                                                          expand=True, padx=(0, 0))
 
-        pos_frame = ttk.LabelFrame(left_frame, text="1c. Selected GDS Position (μm)", padding=10)
+        pos_frame = ttk.LabelFrame(left_frame, text="1c. Selected GDS Position (um)", padding=10)
         pos_frame.pack(fill=tk.X, pady=(0, 10))
 
         ttk.Label(pos_frame, text="Anchor:").grid(row=0, column=0, sticky=tk.W, pady=(0, 5))
@@ -205,6 +208,19 @@ class GDSMultiStitcherApp:
 
         status_bar = ttk.Label(self.root, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W)
         status_bar.pack(side=tk.BOTTOM, fill=tk.X)
+
+    ### 新增：高亮显示被选中的 GDS ###
+    def update_canvas_selection(self):
+        selected_indices = self.listbox.curselection()
+        for i, gds in enumerate(self.gds_list):
+            if gds['patch']:
+                if i in selected_indices:
+                    gds['patch'].set_alpha(0.6)  # 选中时背景变深
+                    gds['patch'].set_linewidth(2.0)  # 选中时边框加粗
+                else:
+                    gds['patch'].set_alpha(0.2)
+                    gds['patch'].set_linewidth(0.5)
+        self.canvas.draw_idle()
 
     def get_bbox(self, gds):
         t_box = gds['trans'] * gds['base_bbox']
@@ -303,6 +319,7 @@ class GDSMultiStitcherApp:
         if self.measure_mode_var.get():
             self.status_var.set("Measure Mode ON: Click once to set start point, click again to finish.")
             self.listbox.selection_clear(0, tk.END)
+            self.update_canvas_selection()
         else:
             self.status_var.set("Measure Mode OFF.")
             self.clear_active_measurement()
@@ -369,7 +386,7 @@ class GDSMultiStitcherApp:
             gds['offset_x'], gds['offset_y'] = target_x - t_box.right, target_y - t_box.top
         elif anchor_type == "Center":
             gds['offset_x'], gds['offset_y'] = target_x - (t_box.left + t_box.right) / 2, target_y - (
-                        t_box.bottom + t_box.top) / 2
+                    t_box.bottom + t_box.top) / 2
 
     def on_listbox_select(self, event=None):
         selection = self.listbox.curselection()
@@ -383,6 +400,8 @@ class GDSMultiStitcherApp:
             if self.measure_mode_var.get():
                 self.measure_mode_var.set(False)
                 self.on_measure_toggle()
+
+        self.update_canvas_selection()
 
     def on_anchor_change(self, event=None):
         self.on_listbox_select()
@@ -491,16 +510,12 @@ class GDSMultiStitcherApp:
                             labelcolor='#999999')
         self.ax.set_axisbelow(True)
 
-        ### 修改的部分：专业化的 Wafer Block 设计 ###
         block_rect = patches.Rectangle((0, 0), self.block_width, self.block_height,
                                        linewidth=1.5, edgecolor='#2c3e50', facecolor='#f4f7f9',
                                        linestyle='-.', zorder=0)
         self.ax.add_patch(block_rect)
-
-        # 原点标识
         self.ax.plot(0, 0, marker='+', color='#2c3e50', markersize=15, markeredgewidth=1.5, zorder=1)
 
-        # 边界尺寸提示
         if self.block_width > 0 and self.block_height > 0:
             self.ax.text(0, self.block_height + self.block_height * 0.01,
                          f'Wafer Block ({self.block_width} x {self.block_height} um)',
@@ -516,7 +531,7 @@ class GDSMultiStitcherApp:
             w, h = t_box.width(), t_box.height()
 
             rect = patches.Rectangle((sx, sy), w, h, linewidth=0.5, edgecolor=gds['color'], facecolor=gds['color'],
-                                     alpha=0.2, zorder=10)
+                                     alpha=0.4, zorder=10)
             self.ax.add_patch(rect)
             gds['patch'] = rect
             gds['poly_patches'] = []
@@ -528,7 +543,7 @@ class GDSMultiStitcherApp:
                     transformed_pts.append((t_pt.x + gds['offset_x'], t_pt.y + gds['offset_y']))
 
                 poly_patch = patches.Polygon(transformed_pts, closed=True, fill=False, edgecolor=gds['color'],
-                                             linestyle='--', linewidth=0.8, alpha=0.9, zorder=15)
+                                             linestyle='-', linewidth=0.8, alpha=0.8, zorder=15)
                 self.ax.add_patch(poly_patch)
                 gds['poly_patches'].append((pts, poly_patch))
 
@@ -551,11 +566,13 @@ class GDSMultiStitcherApp:
                          fontweight='bold', zorder=301,
                          bbox=dict(facecolor='white', alpha=0.8, edgecolor='none', pad=2))
 
+        self.update_canvas_selection()
+
         if reset_view:
             self.ax.set_xlim(-self.block_width * 0.1, self.block_width * 1.1)
             self.ax.set_ylim(-self.block_height * 0.1, self.block_height * 1.1)
         else:
-            self.ax.set_xlim(cur_xlim);
+            self.ax.set_xlim(cur_xlim)
             self.ax.set_ylim(cur_ylim)
 
         self.ax.set_aspect('equal', adjustable='datalim')
@@ -646,20 +663,52 @@ class GDSMultiStitcherApp:
         for line in self.guide_lines: line.remove()
         self.guide_lines.clear()
 
+        ### 编组/多选相关的修改：检测鼠标点击了哪个图块 ###
+        clicked_idx = -1
         for i in range(len(self.gds_list) - 1, -1, -1):
             if self.gds_list[i]['patch'].contains(event)[0]:
-                if event.button in [2, 3]:
-                    self.show_context_menu(i)
-                elif event.button == 1:
-                    self.dragging_idx = i
-                    self.drag_start_x, self.drag_start_y = event.xdata, event.ydata
-                    self.rect_start_x, self.rect_start_y = self.gds_list[i]['patch'].get_x(), self.gds_list[i][
-                        'patch'].get_y()
-                    self.gds_list[i]['patch'].set_alpha(0.6)
-                    self.listbox.selection_clear(0, tk.END)
-                    self.listbox.selection_set(i)
-                    self.on_listbox_select()
+                clicked_idx = i
+                break
+
+        if clicked_idx != -1:
+            if event.button in [2, 3]:
+                self.show_context_menu(clicked_idx)
                 return
+            elif event.button == 1:
+                self.dragging_idx = clicked_idx
+                self.drag_start_x = event.xdata
+                self.drag_start_y = event.ydata
+                self.rect_start_x = self.gds_list[clicked_idx]['patch'].get_x()
+                self.rect_start_y = self.gds_list[clicked_idx]['patch'].get_y()
+
+                current_selection = list(self.listbox.curselection())
+
+                # 如果按下了 Ctrl 键，则执行追加/移除选择
+                if event.key in ['control', 'ctrl']:
+                    if clicked_idx in current_selection:
+                        self.listbox.selection_clear(clicked_idx)
+                    else:
+                        self.listbox.selection_set(clicked_idx)
+                else:
+                    # 没有按下 Ctrl，如果点中的不在已有选区内，就清空其他选中项，只选中它
+                    if clicked_idx not in current_selection:
+                        self.listbox.selection_clear(0, tk.END)
+                        self.listbox.selection_set(clicked_idx)
+                    # 如果点中的本身就在选区内，说明用户想拖动整个选区，不清除
+
+                # 记录所有被选中图块的初始偏移量，用于集体拖动
+                new_selection = self.listbox.curselection()
+                self.drag_start_offsets = {}
+                for idx in new_selection:
+                    self.drag_start_offsets[idx] = (self.gds_list[idx]['offset_x'], self.gds_list[idx]['offset_y'])
+
+                self.on_listbox_select()
+                return
+        else:
+            # 点击了空白处，清空选区
+            if event.button == 1 and event.key not in ['control', 'ctrl']:
+                self.listbox.selection_clear(0, tk.END)
+                self.update_canvas_selection()
 
     def on_motion(self, event):
         if not event.inaxes: return
@@ -700,8 +749,9 @@ class GDSMultiStitcherApp:
         for line in self.guide_lines: line.remove()
         self.guide_lines.clear()
 
-        gds = self.gds_list[self.dragging_idx]
-        t_box = gds['trans'] * gds['base_bbox']
+        ### 编组/多选相关的修改：以鼠标点中的那个图块为“基准抓手”来计算吸附 ###
+        handle_gds = self.gds_list[self.dragging_idx]
+        t_box = handle_gds['trans'] * handle_gds['base_bbox']
 
         nx_proposed = self.rect_start_x + (event.xdata - self.drag_start_x)
         ny_proposed = self.rect_start_y + (event.ydata - self.drag_start_y)
@@ -713,7 +763,7 @@ class GDSMultiStitcherApp:
         snap_thresh_x = (cur_xlim[1] - cur_xlim[0]) * 0.02
         snap_thresh_y = (cur_ylim[1] - cur_ylim[0]) * 0.02
 
-        drag_x_pois, drag_y_pois = self.get_pois(gds, temp_ox, temp_oy)
+        drag_x_pois, drag_y_pois = self.get_pois(handle_gds, temp_ox, temp_oy)
 
         best_snap_x = None
         best_snap_y = None
@@ -722,8 +772,10 @@ class GDSMultiStitcherApp:
         snap_shift_x = 0
         snap_shift_y = 0
 
+        # 防自我吸附：编组在拖拽时，只能吸附原地没动的图块
         for i, other_gds in enumerate(self.gds_list):
-            if i == self.dragging_idx: continue
+            if i in self.drag_start_offsets: continue
+
             other_x_pois, other_y_pois = self.get_pois(other_gds)
 
             for dx in drag_x_pois:
@@ -737,20 +789,32 @@ class GDSMultiStitcherApp:
         final_ox = temp_ox + snap_shift_x
         final_oy = temp_oy + snap_shift_y
 
-        gds['offset_x'], gds['offset_y'] = final_ox, final_oy
-        nx_final, ny_final = t_box.left + final_ox, t_box.bottom + final_oy
-        gds['patch'].set_x(nx_final);
-        gds['patch'].set_y(ny_final)
+        # 计算出拖拽带来的实际整体位移 (Delta)
+        delta_x = final_ox - self.drag_start_offsets[self.dragging_idx][0]
+        delta_y = final_oy - self.drag_start_offsets[self.dragging_idx][1]
 
-        for pts, poly_patch in gds['poly_patches']:
-            new_transformed_pts = []
-            for px, py in pts:
-                t_pt = gds['trans'] * db.DPoint(px, py)
-                new_transformed_pts.append((t_pt.x + final_ox, t_pt.y + final_oy))
-            poly_patch.set_xy(new_transformed_pts)
+        # 把 Delta 应用到所有被选中的图块上，实现“编组齐飞”
+        for idx in self.drag_start_offsets:
+            gds = self.gds_list[idx]
+            new_ox = self.drag_start_offsets[idx][0] + delta_x
+            new_oy = self.drag_start_offsets[idx][1] + delta_y
 
-        if gds['center_text']: gds['center_text'].set_position(
-            (nx_final + t_box.width() / 2, ny_final + t_box.height() / 2))
+            gds['offset_x'], gds['offset_y'] = new_ox, new_oy
+
+            b = gds['trans'] * gds['base_bbox']
+            nx_final, ny_final = b.left + new_ox, b.bottom + new_oy
+            gds['patch'].set_x(nx_final)
+            gds['patch'].set_y(ny_final)
+
+            for pts, poly_patch in gds['poly_patches']:
+                new_transformed_pts = []
+                for px, py in pts:
+                    t_pt = gds['trans'] * db.DPoint(px, py)
+                    new_transformed_pts.append((t_pt.x + new_ox, t_pt.y + new_oy))
+                poly_patch.set_xy(new_transformed_pts)
+
+            if gds['center_text']: gds['center_text'].set_position(
+                (nx_final + b.width() / 2, ny_final + b.height() / 2))
 
         if best_snap_x is not None: self.guide_lines.append(
             self.ax.axvline(x=best_snap_x, color='#FF8C00', linestyle='--', linewidth=1.5, zorder=200))
@@ -760,8 +824,8 @@ class GDSMultiStitcherApp:
         selection = self.listbox.curselection()
         if selection and selection[0] == self.dragging_idx:
             anchor = self.anchor_var.get()
-            x, y = self.get_anchor_coords(gds, anchor)
-            self.selected_x_var.set(f"{x:.3f}");
+            x, y = self.get_anchor_coords(handle_gds, anchor)
+            self.selected_x_var.set(f"{x:.3f}")
             self.selected_y_var.set(f"{y:.3f}")
 
         self.canvas.draw_idle()
@@ -771,10 +835,11 @@ class GDSMultiStitcherApp:
             return
 
         if self.dragging_idx != -1:
-            self.gds_list[self.dragging_idx]['patch'].set_alpha(0.2)
             self.dragging_idx = -1
+            self.drag_start_offsets.clear()
             for line in self.guide_lines: line.remove()
             self.guide_lines.clear()
+            self.update_canvas_selection()  # 松开后保持高亮选中状态
             self.canvas.draw_idle()
 
     def show_context_menu(self, idx):
@@ -803,19 +868,27 @@ class GDSMultiStitcherApp:
 
     def action_rotate_ccw(self, i):
         self.gds_list[i]['trans'] = db.DTrans(1, False, 0, 0) * self.gds_list[i][
-            'trans']; self.draw_preview(); self.on_listbox_select()
+            'trans'];
+        self.draw_preview();
+        self.on_listbox_select()
 
     def action_rotate_cw(self, i):
         self.gds_list[i]['trans'] = db.DTrans(3, False, 0, 0) * self.gds_list[i][
-            'trans']; self.draw_preview(); self.on_listbox_select()
+            'trans'];
+        self.draw_preview();
+        self.on_listbox_select()
 
     def action_flip_horizontal(self, i):
         self.gds_list[i]['trans'] = db.DTrans(2, True, 0, 0) * self.gds_list[i][
-            'trans']; self.draw_preview(); self.on_listbox_select()
+            'trans'];
+        self.draw_preview();
+        self.on_listbox_select()
 
     def action_flip_vertical(self, i):
         self.gds_list[i]['trans'] = db.DTrans(0, True, 0, 0) * self.gds_list[i][
-            'trans']; self.draw_preview(); self.on_listbox_select()
+            'trans'];
+        self.draw_preview();
+        self.on_listbox_select()
 
     def execute_stitch(self):
         if not self.gds_list: return
