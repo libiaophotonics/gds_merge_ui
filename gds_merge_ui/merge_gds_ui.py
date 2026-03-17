@@ -40,13 +40,12 @@ class GDSMultiStitcherApp:
 
         self.guide_lines = []
 
-        ### 新增与修改：测量工具的状态变量 ###
         self.measure_mode_var = tk.BooleanVar(value=False)
         self.measure_start_pt = None
         self.measure_line = None
         self.measure_text = None
-        self.measure_state = 0  # 0: 闲置/已完成上一次测量，准备点选起点； 1: 已点选起点，正在移动找终点
-        self.snap_indicator = None  # 鼠标悬停时的自动吸附红十字光标
+        self.measure_state = 0
+        self.snap_indicator = None
 
         self.block_width_var = tk.StringVar(value="5000.0")
         self.block_height_var = tk.StringVar(value="5000.0")
@@ -113,7 +112,6 @@ class GDSMultiStitcherApp:
                                                                                                        fill=tk.X,
                                                                                                        expand=True,
                                                                                                        padx=(2, 2))
-
         ttk.Checkbutton(btn_f2, text="📏 Measure", style="Toolbutton", variable=self.measure_mode_var,
                         command=self.on_measure_toggle).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(2, 0))
 
@@ -169,7 +167,7 @@ class GDSMultiStitcherApp:
             self.clear_measurement()
             self.canvas.draw_idle()
 
-    ### 修改的部分：清理所有测量相关的视觉元素 ###
+    ### 修改的部分：清理时也要把青色参考线清掉 ###
     def clear_measurement(self):
         if self.measure_line:
             try:
@@ -189,12 +187,17 @@ class GDSMultiStitcherApp:
             except:
                 pass
             self.snap_indicator = None
+        for line in self.guide_lines:
+            try:
+                line.remove()
+            except:
+                pass
+        self.guide_lines.clear()
         self.measure_state = 0
 
     def get_anchor_coords(self, gds, anchor_type):
         t_box = gds['trans'] * gds['base_bbox']
         ox, oy = gds['offset_x'], gds['offset_y']
-
         if anchor_type == "Bottom-Left":
             return t_box.left + ox, t_box.bottom + oy
         elif anchor_type == "Bottom-Right":
@@ -230,7 +233,6 @@ class GDSMultiStitcherApp:
             x, y = self.get_anchor_coords(gds, anchor)
             self.selected_x_var.set(f"{x:.3f}")
             self.selected_y_var.set(f"{y:.3f}")
-
             if self.measure_mode_var.get():
                 self.measure_mode_var.set(False)
                 self.on_measure_toggle()
@@ -387,15 +389,16 @@ class GDSMultiStitcherApp:
         b, t = t_box.bottom + oy, t_box.top + oy
         return [l, r, (l + r) / 2], [b, t, (b + t) / 2]
 
-    ### 修改的部分：全方位强化吸附识别功能（顶点、中心点、边缘线投影）###
+    ### 修改的部分：分离 X 和 Y 轴的吸附，实现交叉点智能捕捉 ###
     def get_snapped_coordinate(self, x, y):
         cur_xlim = self.ax.get_xlim()
         cur_ylim = self.ax.get_ylim()
-        # 捕捉阈值与屏幕缩放比例动态挂钩
-        snap_thresh = min(cur_xlim[1] - cur_xlim[0], cur_ylim[1] - cur_ylim[0]) * 0.02
+        snap_thresh_x = (cur_xlim[1] - cur_xlim[0]) * 0.02
+        snap_thresh_y = (cur_ylim[1] - cur_ylim[0]) * 0.02
 
         best_x, best_y = x, y
-        min_dist = snap_thresh
+        min_dx, min_dy = snap_thresh_x, snap_thresh_y
+        snapped_x, snapped_y = False, False
 
         for gds in self.gds_list:
             t_box = gds['trans'] * gds['base_bbox']
@@ -404,60 +407,47 @@ class GDSMultiStitcherApp:
             b, t = t_box.bottom + oy, t_box.top + oy
             cx, cy = (l + r) / 2, (b + t) / 2
 
-            # 所有关键点：4个角，4个边的中点，1个中心
-            pois = [
-                (l, b), (r, b), (l, t), (r, t),
-                (cx, b), (cx, t), (l, cy), (r, cy),
-                (cx, cy)
-            ]
+            # 遍历检查 X 轴上的吸附
+            for px in [l, r, cx]:
+                if abs(x - px) < min_dx:
+                    min_dx = abs(x - px)
+                    best_x = px
+                    snapped_x = True
 
-            # 边线吸附：如果鼠标在 Y 的范围内，X 靠近左右边缘；或者在 X 范围内，Y 靠近上下边缘
-            if b <= y <= t:
-                pois.extend([(l, y), (r, y)])
-            if l <= x <= r:
-                pois.extend([(x, b), (x, t)])
+            # 遍历检查 Y 轴上的吸附
+            for py in [b, t, cy]:
+                if abs(y - py) < min_dy:
+                    min_dy = abs(y - py)
+                    best_y = py
+                    snapped_y = True
 
-            for px, py in pois:
-                dist = math.hypot(x - px, y - py)
-                if dist < min_dist:
-                    min_dist = dist
-                    best_x, best_y = px, py
-
-        return best_x, best_y
+        return best_x, best_y, snapped_x, snapped_y
 
     def on_press(self, event):
         if not event.inaxes: return
 
-        ### 修改的部分：变成“两次点击”测距状态机逻辑 ###
         if self.measure_mode_var.get() and event.button == 1:
-            snap_x, snap_y = self.get_snapped_coordinate(event.xdata, event.ydata)
+            snap_x, snap_y, _, _ = self.get_snapped_coordinate(event.xdata, event.ydata)
 
             if self.measure_state == 0:
-                # 第一次点击：设置起点
                 self.clear_measurement()
                 self.measure_start_pt = (snap_x, snap_y)
 
-                # 画出测距线和文本
                 self.measure_line, = self.ax.plot([snap_x, snap_x], [snap_y, snap_y], color='#FF1493', linestyle='--',
                                                   linewidth=2, zorder=300)
                 self.measure_text = self.ax.text(snap_x, snap_y, '', color='#FF1493', fontsize=10, fontweight='bold',
                                                  zorder=301,
                                                  bbox=dict(facecolor='white', alpha=0.8, edgecolor='none', pad=2))
-
-                # 重新生成吸附指示器（因为 clear_measurement 把它清掉了）
                 self.snap_indicator, = self.ax.plot([snap_x], [snap_y], marker='+', color='red', markersize=12,
                                                     markeredgewidth=2, zorder=305)
-
                 self.measure_state = 1
             elif self.measure_state == 1:
-                # 第二次点击：完成测量
                 self.measure_state = 0
                 if self.snap_indicator:
-                    # 隐藏红十字光标，保留线和文本
                     self.snap_indicator.set_data([], [])
 
             self.canvas.draw_idle()
-            return  # 阻止后续的拖拽 GDS 逻辑触发
+            return
 
         for line in self.guide_lines: line.remove()
         self.guide_lines.clear()
@@ -480,18 +470,28 @@ class GDSMultiStitcherApp:
     def on_motion(self, event):
         if not event.inaxes: return
 
-        ### 新增的部分：悬停时的实时红十字吸附光标 + 测距跟随 ###
+        ### 修改的部分：加入测量模式下的青色动态参考线 ###
         if self.measure_mode_var.get():
-            snap_x, snap_y = self.get_snapped_coordinate(event.xdata, event.ydata)
+            snap_x, snap_y, sn_x, sn_y = self.get_snapped_coordinate(event.xdata, event.ydata)
 
-            # 更新红十字吸附指示器
+            # 1. 更新红十字指示器
             if not self.snap_indicator:
                 self.snap_indicator, = self.ax.plot([snap_x], [snap_y], marker='+', color='red', markersize=12,
                                                     markeredgewidth=2, zorder=305)
             else:
-                self.snap_indicator.set_data([snap_x], [snap_y])
+                if self.measure_state == 0 or (self.measure_state == 1):
+                    self.snap_indicator.set_data([snap_x], [snap_y])
 
-            # 如果处于已点下起点的状态（状态1），让线和文字跟着跑
+            # 2. 更新对齐参考线 (测量时专用的青色对齐线)
+            for line in self.guide_lines: line.remove()
+            self.guide_lines.clear()
+
+            if sn_x: self.guide_lines.append(
+                self.ax.axvline(x=snap_x, color='#00CED1', linestyle=':', linewidth=1.5, zorder=200))  # 青色竖线
+            if sn_y: self.guide_lines.append(
+                self.ax.axhline(y=snap_y, color='#00CED1', linestyle=':', linewidth=1.5, zorder=200))  # 青色横线
+
+            # 3. 更新粉色的实际测量线和数值
             if self.measure_state == 1 and self.measure_start_pt is not None:
                 x0, y0 = self.measure_start_pt
                 self.measure_line.set_data([x0, snap_x], [y0, snap_y])
@@ -576,7 +576,6 @@ class GDSMultiStitcherApp:
         self.canvas.draw_idle()
 
     def on_release(self, event):
-        ### 修改：只拦截释放事件，避免松开左键时报错，不需要重置测量逻辑了 ###
         if self.measure_mode_var.get() and event.button == 1:
             return
 
