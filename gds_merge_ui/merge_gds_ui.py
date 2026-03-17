@@ -24,7 +24,7 @@ class GDSMultiStitcherApp:
         self.root.title("GDS MERGER 1.0")
 
         window_width = 1150
-        window_height = 860  ### 调高了窗口高度，以容纳对齐面板 ###
+        window_height = 860
         screen_width = self.root.winfo_screenwidth()
         screen_height = self.root.winfo_screenheight()
         x_cordinate = int((screen_width / 2) - (window_width / 2))
@@ -90,7 +90,6 @@ class GDSMultiStitcherApp:
         scrollbar = ttk.Scrollbar(list_frame)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-        ### 修改的部分：增加 selectmode=tk.EXTENDED 支持多选 ###
         self.listbox = tk.Listbox(list_frame, yscrollcommand=scrollbar.set, font=('Arial', 10),
                                   selectbackground="#0078D7", exportselection=False, selectmode=tk.EXTENDED)
         self.listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -142,7 +141,6 @@ class GDSMultiStitcherApp:
                                                                                               pady=(10, 0),
                                                                                               sticky=tk.EW)
 
-        ### 新增的部分：1d. 多选对齐与分布面板 ###
         align_frame = ttk.LabelFrame(left_frame, text="1d. Align & Distribute (Select Multiple)", padding=10)
         align_frame.pack(fill=tk.X, pady=(0, 10))
 
@@ -208,7 +206,6 @@ class GDSMultiStitcherApp:
         status_bar = ttk.Label(self.root, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W)
         status_bar.pack(side=tk.BOTTOM, fill=tk.X)
 
-    ### 新增的部分：获取某个 GDS 的实时外包围盒 ###
     def get_bbox(self, gds):
         t_box = gds['trans'] * gds['base_bbox']
         l = t_box.left + gds['offset_x']
@@ -217,7 +214,6 @@ class GDSMultiStitcherApp:
         t = t_box.top + gds['offset_y']
         return l, r, b, t
 
-    ### 新增的部分：对齐功能核心逻辑 ###
     def align_selected(self, mode):
         selection = self.listbox.curselection()
         if len(selection) < 2:
@@ -227,44 +223,42 @@ class GDSMultiStitcherApp:
         bboxes = [self.get_bbox(self.gds_list[i]) for i in selection]
 
         if mode == 'left':
-            target = min(b[0] for b in bboxes)  # 找到最左侧边界
-            for i in selection:
-                self.set_anchor_coords(self.gds_list[i], 'Bottom-Left', target, self.get_bbox(self.gds_list[i])[2])
+            target = min(b[0] for b in bboxes)
+            for i in selection: self.set_anchor_coords(self.gds_list[i], 'Bottom-Left', target,
+                                                       self.get_bbox(self.gds_list[i])[2])
         elif mode == 'right':
-            target = max(b[1] for b in bboxes)  # 找到最右侧边界
-            for i in selection:
-                self.set_anchor_coords(self.gds_list[i], 'Bottom-Right', target, self.get_bbox(self.gds_list[i])[2])
+            target = max(b[1] for b in bboxes)
+            for i in selection: self.set_anchor_coords(self.gds_list[i], 'Bottom-Right', target,
+                                                       self.get_bbox(self.gds_list[i])[2])
         elif mode == 'center_x':
-            # 以外侧最远端的中点作为基准居中
             overall_l = min(b[0] for b in bboxes)
             overall_r = max(b[1] for b in bboxes)
             target = (overall_l + overall_r) / 2
             for i in selection:
                 bbox = self.get_bbox(self.gds_list[i])
-                cy = (bbox[2] + bbox[3]) / 2  # 保持 Y 轴不动
+                cy = (bbox[2] + bbox[3]) / 2
                 self.set_anchor_coords(self.gds_list[i], 'Center', target, cy)
         elif mode == 'bottom':
-            target = min(b[2] for b in bboxes)  # 找到最底侧边界
-            for i in selection:
-                self.set_anchor_coords(self.gds_list[i], 'Bottom-Left', self.get_bbox(self.gds_list[i])[0], target)
+            target = min(b[2] for b in bboxes)
+            for i in selection: self.set_anchor_coords(self.gds_list[i], 'Bottom-Left',
+                                                       self.get_bbox(self.gds_list[i])[0], target)
         elif mode == 'top':
-            target = max(b[3] for b in bboxes)  # 找到最顶侧边界
-            for i in selection:
-                self.set_anchor_coords(self.gds_list[i], 'Top-Left', self.get_bbox(self.gds_list[i])[0], target)
+            target = max(b[3] for b in bboxes)
+            for i in selection: self.set_anchor_coords(self.gds_list[i], 'Top-Left', self.get_bbox(self.gds_list[i])[0],
+                                                       target)
         elif mode == 'center_y':
             overall_b = min(b[2] for b in bboxes)
             overall_t = max(b[3] for b in bboxes)
             target = (overall_b + overall_t) / 2
             for i in selection:
                 bbox = self.get_bbox(self.gds_list[i])
-                cx = (bbox[0] + bbox[1]) / 2  # 保持 X 轴不动
+                cx = (bbox[0] + bbox[1]) / 2
                 self.set_anchor_coords(self.gds_list[i], 'Center', cx, target)
 
         self.draw_preview(reset_view=False)
-        self.on_listbox_select()  # 刷新坐标框显示
+        self.on_listbox_select()
         self.status_var.set(f"Successfully aligned {len(selection)} items ({mode}).")
 
-    ### 新增的部分：等距分布功能核心逻辑 ###
     def distribute_selected(self, axis):
         selection = self.listbox.curselection()
         if len(selection) < 3:
@@ -278,21 +272,18 @@ class GDSMultiStitcherApp:
             items.append({'idx': i, 'gds': gds, 'l': l, 'r': r, 'b': b, 't': t, 'w': r - l, 'h': t - b})
 
         if axis == 'h':
-            # 按从左到右排序
             items.sort(key=lambda item: item['l'])
             L_bound = items[0]['l']
             R_bound = items[-1]['r']
             total_w = sum(item['w'] for item in items)
-            # 计算平分出来的边缘间距 (Gap)
             gap = (R_bound - L_bound - total_w) / (len(items) - 1)
 
             cur_x = L_bound
             for item in items:
-                self.set_anchor_coords(item['gds'], 'Bottom-Left', cur_x, item['b'])  # 保持各自的 Y 轴高度不变
-                cur_x += item['w'] + gap  # 步进当前元素的宽度 + 间隔
+                self.set_anchor_coords(item['gds'], 'Bottom-Left', cur_x, item['b'])
+                cur_x += item['w'] + gap
 
         elif axis == 'v':
-            # 按从下到上排序
             items.sort(key=lambda item: item['b'])
             B_bound = items[0]['b']
             T_bound = items[-1]['t']
@@ -383,7 +374,6 @@ class GDSMultiStitcherApp:
     def on_listbox_select(self, event=None):
         selection = self.listbox.curselection()
         if selection:
-            # 如果多选了，就以第一个选中的文件作为坐标显示的代表
             idx = selection[0]
             gds = self.gds_list[idx]
             anchor = self.anchor_var.get()
@@ -402,7 +392,6 @@ class GDSMultiStitcherApp:
         if not selection:
             messagebox.showwarning("Warning", "Please select a GDS from the list first.")
             return
-        # 目前的手动坐标修改只应用于单个选中项，避免逻辑冲突
         idx = selection[0]
         try:
             new_x = float(self.selected_x_var.get())
@@ -472,11 +461,9 @@ class GDSMultiStitcherApp:
                 messagebox.showerror("Error", str(e))
         if paths: self.draw_preview(reset_view=True)
 
-    ### 修改的部分：支持一键删除多选的 GDS ###
     def action_delete_selected(self):
         selection = self.listbox.curselection()
         if selection:
-            # 从后往前删，避免索引偏移问题
             for idx in sorted(selection, reverse=True):
                 del self.gds_list[idx]
             self.listbox.delete(0, tk.END)
@@ -500,11 +487,24 @@ class GDSMultiStitcherApp:
 
         grid_color = '#cccccc'
         grid_alpha = 0.4
-
         self.ax.tick_params(axis='both', which='both', length=4, width=0.8, direction='out', colors=grid_color,
                             labelcolor='#999999')
-        self.ax.add_patch(patches.Rectangle((0, 0), self.block_width, self.block_height, linewidth=2, edgecolor='red',
-                                            facecolor='none', zorder=1))
+        self.ax.set_axisbelow(True)
+
+        ### 修改的部分：专业化的 Wafer Block 设计 ###
+        block_rect = patches.Rectangle((0, 0), self.block_width, self.block_height,
+                                       linewidth=1.5, edgecolor='#2c3e50', facecolor='#f4f7f9',
+                                       linestyle='-.', zorder=0)
+        self.ax.add_patch(block_rect)
+
+        # 原点标识
+        self.ax.plot(0, 0, marker='+', color='#2c3e50', markersize=15, markeredgewidth=1.5, zorder=1)
+
+        # 边界尺寸提示
+        if self.block_width > 0 and self.block_height > 0:
+            self.ax.text(0, self.block_height + self.block_height * 0.01,
+                         f'Wafer Block ({self.block_width} x {self.block_height} um)',
+                         ha='left', va='bottom', color='#2c3e50', fontsize=10, fontweight='bold', alpha=0.7)
 
         if not self.gds_list:
             self.ax.text(self.block_width / 2, self.block_height / 2, 'No GDS Loaded', ha='center', va='center',
