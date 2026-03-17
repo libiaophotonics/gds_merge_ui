@@ -199,13 +199,14 @@ class GDSMultiStitcherApp:
 
         ttk.Separator(canvas_toolbar_1, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=4, pady=2)
 
-        # 重叠检测与 BBox 模式
-        ttk.Checkbutton(canvas_toolbar_1, text="🔴 Overlaps Check", style="Toolbutton", variable=self.show_overlap_var,
-                        command=self.on_overlap_toggle).pack(side=tk.LEFT, padx=2)
+        # 重叠检测与 BBox 模式 (带动态文本按钮)
+        self.btn_overlap = ttk.Checkbutton(canvas_toolbar_1, text="🔴 Overlaps: ON", style="Toolbutton",
+                                           variable=self.show_overlap_var, command=self.on_overlap_toggle)
+        self.btn_overlap.pack(side=tk.LEFT, padx=2)
 
-        # --- 新增：BBox 渲染模式切换按钮 ---
-        ttk.Checkbutton(canvas_toolbar_1, text="🔲 BBox Only", style="Toolbutton", variable=self.bbox_only_var,
-                        command=self.on_bbox_toggle).pack(side=tk.LEFT, padx=2)
+        self.btn_bbox = ttk.Checkbutton(canvas_toolbar_1, text="✅ BBox Only", style="Toolbutton",
+                                        variable=self.bbox_only_var, command=self.on_bbox_toggle)
+        self.btn_bbox.pack(side=tk.LEFT, padx=2)
 
         canvas_toolbar_2 = ttk.Frame(right_frame)
         canvas_toolbar_2.pack(side=tk.TOP, fill=tk.X, pady=(2, 5))
@@ -242,14 +243,24 @@ class GDSMultiStitcherApp:
         status_bar = ttk.Label(self.root, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W)
         status_bar.pack(side=tk.BOTTOM, fill=tk.X)
 
-    # --- 性能优化：BBox 模式切换触发器 ---
+    # --- 动态按钮文本切换与重绘触发 ---
     def on_bbox_toggle(self):
         if self.bbox_only_var.get():
+            self.btn_bbox.config(text="✅ BBox Only")
             self.status_var.set("Performance Mode: ON (Showing Bounding Boxes only).")
         else:
+            self.btn_bbox.config(text="🔲 Full Detail")
             self.status_var.set("Performance Mode: OFF (Rendering full polygon contours... this may take a while).")
         # 触发全局重绘
         self.draw_preview(reset_view=False)
+
+    def on_overlap_toggle(self):
+        if self.show_overlap_var.get():
+            self.btn_overlap.config(text="🔴 Overlaps: ON")
+        else:
+            self.btn_overlap.config(text="⭕ Overlaps: OFF")
+        self.draw_overlaps()
+        self.canvas.draw_idle()
 
     def draw_overlaps(self):
         for p in getattr(self, 'overlap_patches', []):
@@ -280,10 +291,6 @@ class GDSMultiStitcherApp:
                                              alpha=0.5, hatch='///', zorder=250)
                     self.ax.add_patch(rect)
                     self.overlap_patches.append(rect)
-
-    def on_overlap_toggle(self):
-        self.draw_overlaps()
-        self.canvas.draw_idle()
 
     def save_snapshot(self):
         snapshot = {
@@ -675,7 +682,6 @@ class GDSMultiStitcherApp:
             gds['poly_patches'] = []
 
             # --- 核心性能优化判定 ---
-            # 只有当 bbox_only_var 为 False 时，才执行耗时的多边形渲染
             if not self.bbox_only_var.get():
                 for pts in gds['true_polygons']:
                     transformed_pts = []
@@ -941,7 +947,7 @@ class GDSMultiStitcherApp:
             gds['patch'].set_x(nx_final)
             gds['patch'].set_y(ny_final)
 
-            # 只有当多边形存在（即未开启 BBox Only）时，才会更新多边形的位置，否则直接略过，非常省算力
+            # 只有当多边形存在（即未开启 BBox Only）时，才会更新多边形的位置
             for pts, poly_patch in gds['poly_patches']:
                 new_transformed_pts = []
                 for px, py in pts:
