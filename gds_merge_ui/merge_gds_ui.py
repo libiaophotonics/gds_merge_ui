@@ -10,7 +10,7 @@ matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.patches as patches
-import matplotlib.colors as mcolors  # 用于处理 RGBA 颜色透明度
+import matplotlib.colors as mcolors
 
 import klayout.db as db
 
@@ -23,10 +23,10 @@ plt.rcParams['axes.unicode_minus'] = False
 class GDSMultiStitcherApp:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("GDS MERGER 1.0")
+        self.root.title("GDS MERGER 1.0 - Advanced")
 
-        window_width = 1150
-        window_height = 860
+        window_width = 1180
+        window_height = 880
         screen_width = self.root.winfo_screenwidth()
         screen_height = self.root.winfo_screenheight()
         x_cordinate = int((screen_width / 2) - (window_width / 2))
@@ -51,8 +51,6 @@ class GDSMultiStitcherApp:
         self.snap_indicator = None
 
         self.measurements = []
-
-        # 撤销历史栈与拖拽状态标识
         self.undo_stack = []
         self.drag_snapshot_taken = False
 
@@ -66,7 +64,6 @@ class GDSMultiStitcherApp:
         self.anchor_var = tk.StringVar(value="Bottom-Left")
         self.anchor_options = ["Bottom-Left", "Bottom-Right", "Top-Left", "Top-Right", "Center"]
 
-        # 将 Distribution 合并进 Align 选项中
         self.align_options_map = {
             "⇤ Align Left": "left",
             "⇹ Align Center X": "center_x",
@@ -78,6 +75,14 @@ class GDSMultiStitcherApp:
             "𝌆 Distribute V": "dist_v"
         }
         self.align_var = tk.StringVar(value="⇤ Align Left")
+
+        # --- 新增：功能变量初始化 ---
+        self.show_overlap_var = tk.BooleanVar(value=True)
+        self.overlap_patches = []
+
+        self.grid_snap_var = tk.BooleanVar(value=False)
+        self.grid_size_var = tk.StringVar(value="10.0")
+        # ----------------------------
 
         self.top_cell_name_var = tk.StringVar(value="MERGED_CHIP")
         self.status_var = tk.StringVar(value="Ready: Please add GDS files.")
@@ -124,7 +129,6 @@ class GDSMultiStitcherApp:
                                   selectbackground="#0078D7", exportselection=False, selectmode=tk.EXTENDED)
         self.listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.config(command=self.listbox.yview)
-
         self.listbox.bind('<<ListboxSelect>>', self.on_listbox_select)
 
         # 1b. Block 尺寸设置
@@ -175,35 +179,44 @@ class GDSMultiStitcherApp:
         right_frame = ttk.LabelFrame(main_frame, text="Interactive Canvas", padding=5)
         right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
 
-        # --- 画图界面的顶部工具栏（单行排版） ---
-        canvas_toolbar = ttk.Frame(right_frame)
-        canvas_toolbar.pack(side=tk.TOP, fill=tk.X, pady=(0, 5))
+        # --- 画图界面的顶部工具栏（分为两行排版） ---
+        canvas_toolbar_1 = ttk.Frame(right_frame)
+        canvas_toolbar_1.pack(side=tk.TOP, fill=tk.X, pady=(0, 2))
 
-        # 1. 视图与基础交互
-        ttk.Button(canvas_toolbar, text="↩️ Undo", command=self.action_undo).pack(side=tk.LEFT, padx=(0, 2))
-        ttk.Button(canvas_toolbar, text="🔍 Zoom Fit", command=lambda: self.draw_preview(reset_view=True)).pack(
+        # 1. 视图与基础交互 (Row 1)
+        ttk.Button(canvas_toolbar_1, text="↩️ Undo", command=self.action_undo).pack(side=tk.LEFT, padx=(0, 2))
+        ttk.Button(canvas_toolbar_1, text="🔍 Zoom Fit", command=lambda: self.draw_preview(reset_view=True)).pack(
             side=tk.LEFT, padx=2)
-        ttk.Checkbutton(canvas_toolbar, text="📏 Measure", style="Toolbutton", variable=self.measure_mode_var,
+        ttk.Separator(canvas_toolbar_1, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=4, pady=2)
+
+        ttk.Checkbutton(canvas_toolbar_1, text="📏 Measure", style="Toolbutton", variable=self.measure_mode_var,
                         command=self.on_measure_toggle).pack(side=tk.LEFT, padx=2)
+        ttk.Button(canvas_toolbar_1, text="🗑️ Clear Measure", command=self.action_clear_measurements).pack(side=tk.LEFT,
+                                                                                                           padx=2)
 
-        # 修改为 Clear Measurement
-        ttk.Button(canvas_toolbar, text="🗑️ Clear Measurement", command=self.action_clear_measurements).pack(
-            side=tk.LEFT, padx=2)
+        ttk.Separator(canvas_toolbar_1, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=4, pady=2)
 
-        # 分割线
-        ttk.Separator(canvas_toolbar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=8, pady=2)
+        # 新增：重叠检测开关
+        ttk.Checkbutton(canvas_toolbar_1, text="🔴 Overlaps Check", style="Toolbutton", variable=self.show_overlap_var,
+                        command=self.on_overlap_toggle).pack(side=tk.LEFT, padx=2)
 
-        # 2. 对齐与分布
-        ttk.Label(canvas_toolbar, text="Align/Dist:").pack(side=tk.LEFT, padx=(0, 2))
+        canvas_toolbar_2 = ttk.Frame(right_frame)
+        canvas_toolbar_2.pack(side=tk.TOP, fill=tk.X, pady=(2, 5))
 
-        # 加宽下拉框，包含对齐和分布选项
-        align_cb = ttk.Combobox(canvas_toolbar, textvariable=self.align_var, values=list(self.align_options_map.keys()),
-                                state="readonly", width=16)
+        # 2. 对齐与分布, 网格吸附 (Row 2)
+        ttk.Label(canvas_toolbar_2, text="Align/Dist:").pack(side=tk.LEFT, padx=(0, 2))
+        align_cb = ttk.Combobox(canvas_toolbar_2, textvariable=self.align_var,
+                                values=list(self.align_options_map.keys()), state="readonly", width=16)
         align_cb.pack(side=tk.LEFT, padx=(0, 2))
+        ttk.Button(canvas_toolbar_2, text="▶ Align", command=self.execute_align).pack(side=tk.LEFT, padx=(0, 5))
 
-        # 修改为 Execute Alignment
-        ttk.Button(canvas_toolbar, text="▶ Execute Alignment", command=self.execute_align).pack(side=tk.LEFT,
-                                                                                                padx=(0, 5))
+        ttk.Separator(canvas_toolbar_2, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=4, pady=2)
+
+        # 新增：网格绝对吸附开关及设置
+        ttk.Checkbutton(canvas_toolbar_2, text="🌐 Grid Snap", style="Toolbutton", variable=self.grid_snap_var).pack(
+            side=tk.LEFT, padx=2)
+        ttk.Label(canvas_toolbar_2, text="Size(um):").pack(side=tk.LEFT, padx=(2, 2))
+        ttk.Entry(canvas_toolbar_2, textvariable=self.grid_size_var, width=6).pack(side=tk.LEFT, padx=2)
         # -----------------------------------------------
 
         # 画布初始化
@@ -222,7 +235,43 @@ class GDSMultiStitcherApp:
         status_bar = ttk.Label(self.root, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W)
         status_bar.pack(side=tk.BOTTOM, fill=tk.X)
 
-    # 保存当前状态快照 (用于 Undo)
+    # --- 核心新增：绘制重叠区域检测 ---
+    def draw_overlaps(self):
+        for p in getattr(self, 'overlap_patches', []):
+            try:
+                p.remove()
+            except:
+                pass
+        self.overlap_patches.clear()
+
+        if not self.show_overlap_var.get():
+            return
+
+        n = len(self.gds_list)
+        tol = 1e-5  # 容差，避免完美拼接时的浮点误判
+        for i in range(n):
+            for j in range(i + 1, n):
+                l1, r1, b1, t1 = self.get_bbox(self.gds_list[i])
+                l2, r2, b2, t2 = self.get_bbox(self.gds_list[j])
+
+                # 严格相交判定
+                if (l1 < r2 - tol) and (r1 > l2 + tol) and (b1 < t2 - tol) and (t1 > b2 + tol):
+                    il = max(l1, l2)
+                    ir = min(r1, r2)
+                    ib = max(b1, b2)
+                    it = min(t1, t2)
+
+                    rect = patches.Rectangle((il, ib), ir - il, it - ib,
+                                             linewidth=1.5, edgecolor='red', facecolor='red',
+                                             alpha=0.5, hatch='///', zorder=250)
+                    self.ax.add_patch(rect)
+                    self.overlap_patches.append(rect)
+
+    def on_overlap_toggle(self):
+        self.draw_overlaps()
+        self.canvas.draw_idle()
+
+    # --- 其他原有功能 ---
     def save_snapshot(self):
         snapshot = {
             'gds_list': [],
@@ -231,22 +280,16 @@ class GDSMultiStitcherApp:
         for gds in self.gds_list:
             trans_copy = gds['trans'] * db.DTrans()
             snap_gds = {
-                'path': gds['path'],
-                'name': gds['name'],
-                'base_bbox': gds['base_bbox'],
-                'trans': trans_copy,
-                'offset_x': gds['offset_x'],
-                'offset_y': gds['offset_y'],
-                'color': gds['color'],
-                'true_polygons': gds['true_polygons']
+                'path': gds['path'], 'name': gds['name'],
+                'base_bbox': gds['base_bbox'], 'trans': trans_copy,
+                'offset_x': gds['offset_x'], 'offset_y': gds['offset_y'],
+                'color': gds['color'], 'true_polygons': gds['true_polygons']
             }
             snapshot['gds_list'].append(snap_gds)
 
         self.undo_stack.append(snapshot)
-        if len(self.undo_stack) > 30:
-            self.undo_stack.pop(0)
+        if len(self.undo_stack) > 30: self.undo_stack.pop(0)
 
-    # 执行撤销
     def action_undo(self):
         if not self.undo_stack:
             self.status_var.set("Nothing to undo.")
@@ -258,120 +301,74 @@ class GDSMultiStitcherApp:
 
         for item in snapshot['gds_list']:
             gds_info = {
-                'path': item['path'],
-                'name': item['name'],
-                'base_bbox': item['base_bbox'],
-                'trans': item['trans'],
-                'offset_x': item['offset_x'],
-                'offset_y': item['offset_y'],
-                'color': item['color'],
-                'patch': None,
-                'center_text': None,
-                'true_polygons': item['true_polygons'],
-                'poly_patches': []
+                'path': item['path'], 'name': item['name'],
+                'base_bbox': item['base_bbox'], 'trans': item['trans'],
+                'offset_x': item['offset_x'], 'offset_y': item['offset_y'],
+                'color': item['color'], 'patch': None, 'center_text': None,
+                'true_polygons': item['true_polygons'], 'poly_patches': []
             }
             self.gds_list.append(gds_info)
             self.listbox.insert(tk.END, f"[{len(self.gds_list)}] {item['name']}")
 
         self.measurements = snapshot.get('measurements', [])
-
         self.clear_active_measurement()
         self.draw_preview(reset_view=False)
         self.status_var.set("Undo successful.")
 
     def action_save_project(self):
-        if not self.gds_list:
-            messagebox.showinfo("Info", "No GDS loaded. Nothing to save.")
-            return
-
-        filepath = filedialog.asksaveasfilename(defaultextension=".gdsprj",
-                                                filetypes=[("GDS Project", "*.gdsprj"), ("JSON Files", "*.json")])
-        if not filepath:
-            return
-
+        if not self.gds_list: return
+        filepath = filedialog.asksaveasfilename(defaultextension=".gdsprj", filetypes=[("GDS Project", "*.gdsprj")])
+        if not filepath: return
         try:
             project_data = {
-                "block_width": self.block_width,
-                "block_height": self.block_height,
-                "top_cell_name": self.top_cell_name_var.get(),
-                "measurements": self.measurements,
-                "gds_items": []
+                "block_width": self.block_width, "block_height": self.block_height,
+                "top_cell_name": self.top_cell_name_var.get(), "measurements": self.measurements, "gds_items": []
             }
-
             for gds in self.gds_list:
                 item = {
-                    "path": gds["path"],
-                    "name": gds["name"],
-                    "offset_x": gds["offset_x"],
-                    "offset_y": gds["offset_y"],
-                    "color": gds["color"],
-                    "trans_rot": gds["trans"].rot,
-                    "trans_mirror": gds["trans"].is_mirror(),
-                    "trans_dx": gds["trans"].disp.x,
+                    "path": gds["path"], "name": gds["name"],
+                    "offset_x": gds["offset_x"], "offset_y": gds["offset_y"],
+                    "color": gds["color"], "trans_rot": gds["trans"].rot,
+                    "trans_mirror": gds["trans"].is_mirror(), "trans_dx": gds["trans"].disp.x,
                     "trans_dy": gds["trans"].disp.y
                 }
                 project_data["gds_items"].append(item)
-
             with open(filepath, 'w', encoding='utf-8') as f:
                 json.dump(project_data, f, indent=4)
-
-            self.status_var.set(f"Project saved to: {os.path.basename(filepath)}")
             messagebox.showinfo("Success", "Project successfully saved!")
-
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save project:\n{str(e)}")
 
     def action_load_project(self):
-        filepath = filedialog.askopenfilename(filetypes=[("GDS Project", "*.gdsprj"), ("JSON Files", "*.json")])
-        if not filepath:
-            return
-
+        filepath = filedialog.askopenfilename(filetypes=[("GDS Project", "*.gdsprj")])
+        if not filepath: return
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 project_data = json.load(f)
-
             self.gds_list.clear()
             self.listbox.delete(0, tk.END)
             self.measurements = project_data.get("measurements", [])
             self.clear_active_measurement()
             self.undo_stack.clear()
-
             self.block_width_var.set(str(project_data.get("block_width", 5000.0)))
             self.block_height_var.set(str(project_data.get("block_height", 5000.0)))
             self.top_cell_name_var.set(project_data.get("top_cell_name", "MERGED_CHIP"))
             self.update_block_size()
 
-            gds_items = project_data.get("gds_items", [])
-            for item in gds_items:
+            for item in project_data.get("gds_items", []):
                 path = item.get("path")
                 name = item.get("name")
-
-                if not os.path.exists(path):
-                    messagebox.showwarning("File Missing",
-                                           f"Could not find the GDS file:\n{path}\n\nThis item will be skipped.")
-                    continue
-
-                self.status_var.set(f"Loading {name}... Please wait.")
-                self.root.update()
-
+                if not os.path.exists(path): continue
                 base_bbox, true_polygons = self.parse_gds_info(path)
                 trans = db.DTrans(item["trans_rot"], item["trans_mirror"], item["trans_dx"], item["trans_dy"])
-
                 gds_info = {
-                    'path': path, 'name': name,
-                    'base_bbox': base_bbox, 'trans': trans,
-                    'offset_x': item["offset_x"], 'offset_y': item["offset_y"],
-                    'color': item["color"],
-                    'patch': None, 'center_text': None,
-                    'true_polygons': true_polygons,
-                    'poly_patches': []
+                    'path': path, 'name': name, 'base_bbox': base_bbox, 'trans': trans,
+                    'offset_x': item["offset_x"], 'offset_y': item["offset_y"], 'color': item["color"],
+                    'patch': None, 'center_text': None, 'true_polygons': true_polygons, 'poly_patches': []
                 }
                 self.gds_list.append(gds_info)
                 self.listbox.insert(tk.END, f"[{len(self.gds_list)}] {name}")
-
             self.draw_preview(reset_view=True)
-            self.status_var.set(f"Project loaded from: {os.path.basename(filepath)}")
-
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load project:\n{str(e)}")
 
@@ -398,7 +395,6 @@ class GDSMultiStitcherApp:
     def execute_align(self):
         selected_option = self.align_var.get()
         mode = self.align_options_map.get(selected_option)
-
         if mode in ['left', 'right', 'center_x', 'bottom', 'top', 'center_y']:
             self.align_selected(mode)
         elif mode == 'dist_h':
@@ -408,10 +404,7 @@ class GDSMultiStitcherApp:
 
     def align_selected(self, mode):
         selection = self.listbox.curselection()
-        if len(selection) < 2:
-            messagebox.showwarning("Warning", "Please select at least 2 GDS files (Ctrl/Shift + Click) to align.")
-            return
-
+        if len(selection) < 2: return
         self.save_snapshot()
         bboxes = [self.get_bbox(self.gds_list[i]) for i in selection]
 
@@ -424,13 +417,9 @@ class GDSMultiStitcherApp:
             for i in selection: self.set_anchor_coords(self.gds_list[i], 'Bottom-Right', target,
                                                        self.get_bbox(self.gds_list[i])[2])
         elif mode == 'center_x':
-            overall_l = min(b[0] for b in bboxes)
-            overall_r = max(b[1] for b in bboxes)
-            target = (overall_l + overall_r) / 2
-            for i in selection:
-                bbox = self.get_bbox(self.gds_list[i])
-                cy = (bbox[2] + bbox[3]) / 2
-                self.set_anchor_coords(self.gds_list[i], 'Center', target, cy)
+            target = (min(b[0] for b in bboxes) + max(b[1] for b in bboxes)) / 2
+            for i in selection: self.set_anchor_coords(self.gds_list[i], 'Center', target, (
+                        self.get_bbox(self.gds_list[i])[2] + self.get_bbox(self.gds_list[i])[3]) / 2)
         elif mode == 'bottom':
             target = min(b[2] for b in bboxes)
             for i in selection: self.set_anchor_coords(self.gds_list[i], 'Bottom-Left',
@@ -440,58 +429,39 @@ class GDSMultiStitcherApp:
             for i in selection: self.set_anchor_coords(self.gds_list[i], 'Top-Left', self.get_bbox(self.gds_list[i])[0],
                                                        target)
         elif mode == 'center_y':
-            overall_b = min(b[2] for b in bboxes)
-            overall_t = max(b[3] for b in bboxes)
-            target = (overall_b + overall_t) / 2
-            for i in selection:
-                bbox = self.get_bbox(self.gds_list[i])
-                cx = (bbox[0] + bbox[1]) / 2
-                self.set_anchor_coords(self.gds_list[i], 'Center', cx, target)
+            target = (min(b[2] for b in bboxes) + max(b[3] for b in bboxes)) / 2
+            for i in selection: self.set_anchor_coords(self.gds_list[i], 'Center', (
+                        self.get_bbox(self.gds_list[i])[0] + self.get_bbox(self.gds_list[i])[1]) / 2, target)
 
         self.draw_preview(reset_view=False)
         self.on_listbox_select()
-        self.status_var.set(f"Successfully aligned {len(selection)} items ({mode}).")
 
     def distribute_selected(self, axis):
         selection = self.listbox.curselection()
-        if len(selection) < 3:
-            messagebox.showwarning("Warning", "Please select at least 3 GDS files to distribute evenly.")
-            return
-
+        if len(selection) < 3: return
         self.save_snapshot()
-        items = []
-        for i in selection:
-            gds = self.gds_list[i]
-            l, r, b, t = self.get_bbox(gds)
-            items.append({'idx': i, 'gds': gds, 'l': l, 'r': r, 'b': b, 't': t, 'w': r - l, 'h': t - b})
+        items = [{'idx': i, 'gds': self.gds_list[i], 'l': self.get_bbox(self.gds_list[i])[0],
+                  'r': self.get_bbox(self.gds_list[i])[1], 'b': self.get_bbox(self.gds_list[i])[2],
+                  't': self.get_bbox(self.gds_list[i])[3]} for i in selection]
+        for item in items: item['w'], item['h'] = item['r'] - item['l'], item['t'] - item['b']
 
         if axis == 'h':
             items.sort(key=lambda item: item['l'])
-            L_bound = items[0]['l']
-            R_bound = items[-1]['r']
-            total_w = sum(item['w'] for item in items)
-            gap = (R_bound - L_bound - total_w) / (len(items) - 1)
-
-            cur_x = L_bound
+            gap = (items[-1]['r'] - items[0]['l'] - sum(item['w'] for item in items)) / (len(items) - 1)
+            cur_x = items[0]['l']
             for item in items:
                 self.set_anchor_coords(item['gds'], 'Bottom-Left', cur_x, item['b'])
                 cur_x += item['w'] + gap
-
         elif axis == 'v':
             items.sort(key=lambda item: item['b'])
-            B_bound = items[0]['b']
-            T_bound = items[-1]['t']
-            total_h = sum(item['h'] for item in items)
-            gap = (T_bound - B_bound - total_h) / (len(items) - 1)
-
-            cur_y = B_bound
+            gap = (items[-1]['t'] - items[0]['b'] - sum(item['h'] for item in items)) / (len(items) - 1)
+            cur_y = items[0]['b']
             for item in items:
                 self.set_anchor_coords(item['gds'], 'Bottom-Left', item['l'], cur_y)
                 cur_y += item['h'] + gap
 
         self.draw_preview(reset_view=False)
         self.on_listbox_select()
-        self.status_var.set(f"Distributed {len(selection)} items with equal spacing ({axis}).")
 
     def on_measure_toggle(self):
         if self.measure_mode_var.get():
@@ -508,7 +478,6 @@ class GDSMultiStitcherApp:
         self.measurements.clear()
         self.clear_active_measurement()
         self.draw_preview(reset_view=False)
-        self.status_var.set("All measurements cleared.")
 
     def clear_active_measurement(self):
         if self.measure_line:
@@ -538,9 +507,10 @@ class GDSMultiStitcherApp:
         self.measure_state = 0
         self.measure_start_pt = None
 
-    def get_anchor_coords(self, gds, anchor_type):
+    def get_anchor_coords(self, gds, anchor_type, temp_ox=None, temp_oy=None):
         t_box = gds['trans'] * gds['base_bbox']
-        ox, oy = gds['offset_x'], gds['offset_y']
+        ox = gds['offset_x'] if temp_ox is None else temp_ox
+        oy = gds['offset_y'] if temp_oy is None else temp_oy
         if anchor_type == "Bottom-Left":
             return t_box.left + ox, t_box.bottom + oy
         elif anchor_type == "Bottom-Right":
@@ -565,7 +535,7 @@ class GDSMultiStitcherApp:
             gds['offset_x'], gds['offset_y'] = target_x - t_box.right, target_y - t_box.top
         elif anchor_type == "Center":
             gds['offset_x'], gds['offset_y'] = target_x - (t_box.left + t_box.right) / 2, target_y - (
-                    t_box.bottom + t_box.top) / 2
+                        t_box.bottom + t_box.top) / 2
 
     def on_listbox_select(self, event=None):
         selection = self.listbox.curselection()
@@ -579,7 +549,6 @@ class GDSMultiStitcherApp:
             if self.measure_mode_var.get():
                 self.measure_mode_var.set(False)
                 self.on_measure_toggle()
-
         self.update_canvas_selection()
 
     def on_anchor_change(self, event=None):
@@ -587,44 +556,33 @@ class GDSMultiStitcherApp:
 
     def apply_manual_position(self):
         selection = self.listbox.curselection()
-        if not selection:
-            messagebox.showwarning("Warning", "Please select a GDS from the list first.")
-            return
-
+        if not selection: return
         self.save_snapshot()
         idx = selection[0]
         try:
             new_x = float(self.selected_x_var.get())
             new_y = float(self.selected_y_var.get())
-            anchor = self.anchor_var.get()
-            self.set_anchor_coords(self.gds_list[idx], anchor, new_x, new_y)
+            self.set_anchor_coords(self.gds_list[idx], self.anchor_var.get(), new_x, new_y)
             self.draw_preview(reset_view=False)
-            self.status_var.set(f"{anchor} of {self.gds_list[idx]['name']} updated to ({new_x}, {new_y})")
         except ValueError:
-            messagebox.showerror("Error", "Invalid coordinate values. Please enter numbers.")
+            pass
 
     def parse_gds_info(self, filepath):
         layout = db.Layout()
         layout.read(filepath)
         top_cell = layout.top_cells()[0]
         base_bbox = top_cell.dbbox()
-
         region = db.Region()
-        for li in layout.layer_indexes():
-            region.insert(top_cell.begin_shapes_rec(li))
-
+        for li in layout.layer_indexes(): region.insert(top_cell.begin_shapes_rec(li))
         region.merge()
         region = region.hulls()
-
         dbu = layout.dbu
         trans = db.DCplxTrans(dbu)
         true_polygons = []
         for poly in region.each():
             dpoly = db.DPolygon(poly).transformed(trans)
             pts = [(pt.x, pt.y) for pt in dpoly.each_point_hull()]
-            if pts:
-                true_polygons.append(pts)
-
+            if pts: true_polygons.append(pts)
         return base_bbox, true_polygons
 
     def update_block_size(self):
@@ -633,32 +591,23 @@ class GDSMultiStitcherApp:
             self.block_height = float(self.block_height_var.get())
             self.draw_preview(reset_view=True)
         except:
-            messagebox.showerror("Error", "Invalid dimensions")
+            pass
 
     def add_gds(self):
         paths = filedialog.askopenfilenames(filetypes=[("GDS Files", "*.gds")])
         for p in paths:
             try:
                 self.save_snapshot()
-
                 base_name = os.path.splitext(os.path.basename(p))[0]
-                self.status_var.set(f"Parsing true contour for {base_name}... Please wait.")
-                self.root.update()
-
                 base_bbox, true_polygons = self.parse_gds_info(p)
-
                 gds_info = {
-                    'path': p, 'name': base_name,
-                    'base_bbox': base_bbox, 'trans': db.DTrans(),
+                    'path': p, 'name': base_name, 'base_bbox': base_bbox, 'trans': db.DTrans(),
                     'offset_x': 0.0, 'offset_y': 0.0,
                     'color': self.color_palette[len(self.gds_list) % len(self.color_palette)],
-                    'patch': None, 'center_text': None,
-                    'true_polygons': true_polygons,
-                    'poly_patches': []
+                    'patch': None, 'center_text': None, 'true_polygons': true_polygons, 'poly_patches': []
                 }
                 self.gds_list.append(gds_info)
                 self.listbox.insert(tk.END, f"[{len(self.gds_list)}] {base_name}")
-                self.status_var.set("Ready.")
             except Exception as e:
                 messagebox.showerror("Error", str(e))
         if paths: self.draw_preview(reset_view=True)
@@ -667,11 +616,9 @@ class GDSMultiStitcherApp:
         selection = self.listbox.curselection()
         if selection:
             self.save_snapshot()
-            for idx in sorted(selection, reverse=True):
-                del self.gds_list[idx]
+            for idx in sorted(selection, reverse=True): del self.gds_list[idx]
             self.listbox.delete(0, tk.END)
-            for i, gds in enumerate(self.gds_list):
-                self.listbox.insert(tk.END, f"[{i + 1}] {gds['name']}")
+            for i, gds in enumerate(self.gds_list): self.listbox.insert(tk.END, f"[{i + 1}] {gds['name']}")
             self.selected_x_var.set("0.0")
             self.selected_y_var.set("0.0")
             self.draw_preview(reset_view=False)
@@ -694,16 +641,10 @@ class GDSMultiStitcherApp:
                             labelcolor='#999999')
         self.ax.set_axisbelow(True)
 
-        block_rect = patches.Rectangle((0, 0), self.block_width, self.block_height,
-                                       linewidth=1.5, edgecolor='#2c3e50', facecolor='#f4f7f9',
-                                       linestyle='-.', zorder=0)
+        block_rect = patches.Rectangle((0, 0), self.block_width, self.block_height, linewidth=1.5, edgecolor='#2c3e50',
+                                       facecolor='#f4f7f9', linestyle='-.', zorder=0)
         self.ax.add_patch(block_rect)
         self.ax.plot(0, 0, marker='+', color='#2c3e50', markersize=15, markeredgewidth=1.5, zorder=1)
-
-        if self.block_width > 0 and self.block_height > 0:
-            self.ax.text(0, self.block_height + self.block_height * 0.01,
-                         f'Wafer Block ({self.block_width} x {self.block_height} um)',
-                         ha='left', va='bottom', color='#2c3e50', fontsize=10, fontweight='bold', alpha=0.7)
 
         if not self.gds_list:
             self.ax.text(self.block_width / 2, self.block_height / 2, 'No GDS Loaded', ha='center', va='center',
@@ -714,7 +655,6 @@ class GDSMultiStitcherApp:
             sx, sy = t_box.left + gds['offset_x'], t_box.bottom + gds['offset_y']
             w, h = t_box.width(), t_box.height()
 
-            # 外边框矩形（维持 0.6 的透明度）
             rect = patches.Rectangle((sx, sy), w, h, linewidth=0.5, edgecolor=gds['color'], facecolor=gds['color'],
                                      alpha=0.6, zorder=10)
             self.ax.add_patch(rect)
@@ -727,14 +667,10 @@ class GDSMultiStitcherApp:
                     t_pt = gds['trans'] * db.DPoint(px, py)
                     transformed_pts.append((t_pt.x + gds['offset_x'], t_pt.y + gds['offset_y']))
 
-                # 转换颜色为 RGBA，控制边框和填充的透明度
                 edge_c = mcolors.to_rgba(gds['color'], alpha=0.7)
                 face_c = mcolors.to_rgba('black', alpha=0.3)
-
-                # 多边形内部使用实线与黑色填充
-                poly_patch = patches.Polygon(transformed_pts, closed=True, fill=True,
-                                             facecolor=face_c, edgecolor=edge_c,
-                                             linestyle='-', linewidth=0.8, zorder=15)
+                poly_patch = patches.Polygon(transformed_pts, closed=True, fill=True, facecolor=face_c,
+                                             edgecolor=edge_c, linestyle='-', linewidth=0.8, zorder=15)
                 self.ax.add_patch(poly_patch)
                 gds['poly_patches'].append((pts, poly_patch))
 
@@ -742,7 +678,6 @@ class GDSMultiStitcherApp:
             ratio = box_min / min(self.block_width, self.block_height) if min(self.block_width,
                                                                               self.block_height) > 0 else 1.0
             dynamic_fs = max(6, min(35, int(6 + 18 * ratio)))
-
             gds['center_text'] = self.ax.text(sx + w / 2, sy + h / 2, gds['name'], ha='center', va='center',
                                               fontsize=dynamic_fs, color='black', fontweight='bold', alpha=0.7,
                                               zorder=90)
@@ -751,10 +686,8 @@ class GDSMultiStitcherApp:
             x0, y0, x1, y1 = m['x0'], m['y0'], m['x1'], m['y1']
             self.ax.plot([x0, x1], [y0, y1], color='#FF1493', linestyle='--', linewidth=1, zorder=300)
             dist = math.hypot(x1 - x0, y1 - y0)
-            dx = abs(x1 - x0)
-            dy = abs(y1 - y0)
-            self.ax.text(x1, y1, f" L: {dist:.2f}\n dx: {dx:.2f}\n dy: {dy:.2f}", color='#FF1493', fontsize=10,
-                         fontweight='bold', zorder=301,
+            self.ax.text(x1, y1, f" L: {dist:.2f}\n dx: {abs(x1 - x0):.2f}\n dy: {abs(y1 - y0):.2f}", color='#FF1493',
+                         fontsize=10, fontweight='bold', zorder=301,
                          bbox=dict(facecolor='white', alpha=0.8, edgecolor='none', pad=2))
 
         self.update_canvas_selection()
@@ -768,6 +701,10 @@ class GDSMultiStitcherApp:
 
         self.ax.set_aspect('equal', adjustable='datalim')
         self.ax.grid(True, linestyle='-', color=grid_color, alpha=grid_alpha)
+
+        # --- 新增：画图周期内执行重叠检测 ---
+        self.draw_overlaps()
+
         self.canvas.draw()
 
     def on_scroll(self, event):
@@ -806,16 +743,9 @@ class GDSMultiStitcherApp:
             cx, cy = (l + r) / 2, (b + t) / 2
 
             for px in [l, r, cx]:
-                if abs(x - px) < min_dx:
-                    min_dx = abs(x - px)
-                    best_x = px
-                    snapped_x = True
-
+                if abs(x - px) < min_dx: min_dx, best_x, snapped_x = abs(x - px), px, True
             for py in [b, t, cy]:
-                if abs(y - py) < min_dy:
-                    min_dy = abs(y - py)
-                    best_y = py
-                    snapped_y = True
+                if abs(y - py) < min_dy: min_dy, best_y, snapped_y = abs(y - py), py, True
 
         return best_x, best_y, snapped_x, snapped_y
 
@@ -824,11 +754,9 @@ class GDSMultiStitcherApp:
 
         if self.measure_mode_var.get() and event.button == 1:
             snap_x, snap_y, _, _ = self.get_snapped_coordinate(event.xdata, event.ydata)
-
             if self.measure_state == 0:
                 self.clear_active_measurement()
                 self.measure_start_pt = (snap_x, snap_y)
-
                 self.measure_line, = self.ax.plot([snap_x, snap_x], [snap_y, snap_y], color='#FF1493', linestyle='--',
                                                   linewidth=1, zorder=300)
                 self.measure_text = self.ax.text(snap_x, snap_y, '', color='#FF1493', fontsize=10, fontweight='bold',
@@ -841,14 +769,10 @@ class GDSMultiStitcherApp:
                 self.save_snapshot()
                 x0, y0 = self.measure_start_pt
                 self.measurements.append({'x0': x0, 'y0': y0, 'x1': snap_x, 'y1': snap_y})
-
                 self.measure_state = 0
-                if self.snap_indicator:
-                    self.snap_indicator.set_data([], [])
-
+                if self.snap_indicator: self.snap_indicator.set_data([], [])
                 self.measure_line = None
                 self.measure_text = None
-
             self.canvas.draw_idle()
             return
 
@@ -873,7 +797,6 @@ class GDSMultiStitcherApp:
                 self.rect_start_y = self.gds_list[clicked_idx]['patch'].get_y()
 
                 current_selection = list(self.listbox.curselection())
-
                 if event.key in ['control', 'ctrl']:
                     if clicked_idx in current_selection:
                         self.listbox.selection_clear(clicked_idx)
@@ -884,11 +807,9 @@ class GDSMultiStitcherApp:
                         self.listbox.selection_clear(0, tk.END)
                         self.listbox.selection_set(clicked_idx)
 
-                new_selection = self.listbox.curselection()
                 self.drag_start_offsets = {}
-                for idx in new_selection:
+                for idx in self.listbox.curselection():
                     self.drag_start_offsets[idx] = (self.gds_list[idx]['offset_x'], self.gds_list[idx]['offset_y'])
-
                 self.on_listbox_select()
                 return
         else:
@@ -901,32 +822,23 @@ class GDSMultiStitcherApp:
 
         if self.measure_mode_var.get():
             snap_x, snap_y, sn_x, sn_y = self.get_snapped_coordinate(event.xdata, event.ydata)
-
             if not self.snap_indicator:
                 self.snap_indicator, = self.ax.plot([snap_x], [snap_y], marker='+', color='red', markersize=12,
                                                     markeredgewidth=2, zorder=305)
             else:
-                if self.measure_state == 0 or (self.measure_state == 1):
-                    self.snap_indicator.set_data([snap_x], [snap_y])
-
+                if self.measure_state in [0, 1]: self.snap_indicator.set_data([snap_x], [snap_y])
             for line in self.guide_lines: line.remove()
             self.guide_lines.clear()
-
             if sn_x: self.guide_lines.append(
                 self.ax.axvline(x=snap_x, color='#00CED1', linestyle=':', linewidth=1.5, zorder=200))
             if sn_y: self.guide_lines.append(
                 self.ax.axhline(y=snap_y, color='#00CED1', linestyle=':', linewidth=1.5, zorder=200))
-
             if self.measure_state == 1 and self.measure_start_pt is not None:
                 x0, y0 = self.measure_start_pt
                 self.measure_line.set_data([x0, snap_x], [y0, snap_y])
-                dist = math.hypot(snap_x - x0, snap_y - y0)
-                dx = abs(snap_x - x0)
-                dy = abs(snap_y - y0)
-
                 self.measure_text.set_position((snap_x, snap_y))
-                self.measure_text.set_text(f" L: {dist:.2f}\n dx: {dx:.2f}\n dy: {dy:.2f}")
-
+                self.measure_text.set_text(
+                    f" L: {math.hypot(snap_x - x0, snap_y - y0):.2f}\n dx: {abs(snap_x - x0):.2f}\n dy: {abs(snap_y - y0):.2f}")
             self.canvas.draw_idle()
             return
 
@@ -947,36 +859,63 @@ class GDSMultiStitcherApp:
         temp_ox = nx_proposed - t_box.left
         temp_oy = ny_proposed - t_box.bottom
 
-        cur_xlim = self.ax.get_xlim()
-        cur_ylim = self.ax.get_ylim()
-        snap_thresh_x = (cur_xlim[1] - cur_xlim[0]) * 0.02
-        snap_thresh_y = (cur_ylim[1] - cur_ylim[0]) * 0.02
+        best_snap_x, best_snap_y = None, None
+        is_grid_snapped = False
 
-        drag_x_pois, drag_y_pois = self.get_pois(handle_gds, temp_ox, temp_oy)
+        # --- 新增：网格绝对吸附判断 ---
+        if self.grid_snap_var.get():
+            try:
+                g_size = float(self.grid_size_var.get())
+                if g_size > 0:
+                    anchor = self.anchor_var.get()
+                    curr_x, curr_y = self.get_anchor_coords(handle_gds, anchor, temp_ox=temp_ox, temp_oy=temp_oy)
 
-        best_snap_x = None
-        best_snap_y = None
-        min_dx = snap_thresh_x
-        min_dy = snap_thresh_y
-        snap_shift_x = 0
-        snap_shift_y = 0
+                    # 取整到最近的网格倍数
+                    snap_x = round(curr_x / g_size) * g_size
+                    snap_y = round(curr_y / g_size) * g_size
 
-        for i, other_gds in enumerate(self.gds_list):
-            if i in self.drag_start_offsets: continue
+                    # 反推偏移量
+                    if anchor == "Bottom-Left":
+                        temp_ox, temp_oy = snap_x - t_box.left, snap_y - t_box.bottom
+                    elif anchor == "Bottom-Right":
+                        temp_ox, temp_oy = snap_x - t_box.right, snap_y - t_box.bottom
+                    elif anchor == "Top-Left":
+                        temp_ox, temp_oy = snap_x - t_box.left, snap_y - t_box.top
+                    elif anchor == "Top-Right":
+                        temp_ox, temp_oy = snap_x - t_box.right, snap_y - t_box.top
+                    elif anchor == "Center":
+                        temp_ox, temp_oy = snap_x - (t_box.left + t_box.right) / 2, snap_y - (
+                                    t_box.bottom + t_box.top) / 2
 
-            other_x_pois, other_y_pois = self.get_pois(other_gds)
+                    is_grid_snapped = True
+            except ValueError:
+                pass
 
-            for dx in drag_x_pois:
-                for ox in other_x_pois:
-                    if abs(dx - ox) < min_dx: min_dx, best_snap_x, snap_shift_x = abs(dx - ox), ox, ox - dx
+        # 若未开启网格吸附，则执行对象边缘对齐吸附
+        if not is_grid_snapped:
+            cur_xlim = self.ax.get_xlim()
+            cur_ylim = self.ax.get_ylim()
+            snap_thresh_x = (cur_xlim[1] - cur_xlim[0]) * 0.02
+            snap_thresh_y = (cur_ylim[1] - cur_ylim[0]) * 0.02
 
-            for dy in drag_y_pois:
-                for oy in other_y_pois:
-                    if abs(dy - oy) < min_dy: min_dy, best_snap_y, snap_shift_y = abs(dy - oy), oy, oy - dy
+            drag_x_pois, drag_y_pois = self.get_pois(handle_gds, temp_ox, temp_oy)
+            min_dx, min_dy = snap_thresh_x, snap_thresh_y
+            snap_shift_x, snap_shift_y = 0, 0
 
-        final_ox = temp_ox + snap_shift_x
-        final_oy = temp_oy + snap_shift_y
+            for i, other_gds in enumerate(self.gds_list):
+                if i in self.drag_start_offsets: continue
+                other_x_pois, other_y_pois = self.get_pois(other_gds)
+                for dx in drag_x_pois:
+                    for ox in other_x_pois:
+                        if abs(dx - ox) < min_dx: min_dx, best_snap_x, snap_shift_x = abs(dx - ox), ox, ox - dx
+                for dy in drag_y_pois:
+                    for oy in other_y_pois:
+                        if abs(dy - oy) < min_dy: min_dy, best_snap_y, snap_shift_y = abs(dy - oy), oy, oy - dy
 
+            temp_ox += snap_shift_x
+            temp_oy += snap_shift_y
+
+        final_ox, final_oy = temp_ox, temp_oy
         delta_x = final_ox - self.drag_start_offsets[self.dragging_idx][0]
         delta_y = final_oy - self.drag_start_offsets[self.dragging_idx][1]
 
@@ -984,7 +923,6 @@ class GDSMultiStitcherApp:
             gds = self.gds_list[idx]
             new_ox = self.drag_start_offsets[idx][0] + delta_x
             new_oy = self.drag_start_offsets[idx][1] + delta_y
-
             gds['offset_x'], gds['offset_y'] = new_ox, new_oy
 
             b = gds['trans'] * gds['base_bbox']
@@ -1002,10 +940,11 @@ class GDSMultiStitcherApp:
             if gds['center_text']: gds['center_text'].set_position(
                 (nx_final + b.width() / 2, ny_final + b.height() / 2))
 
-        if best_snap_x is not None: self.guide_lines.append(
-            self.ax.axvline(x=best_snap_x, color='#FF8C00', linestyle='--', linewidth=1.5, zorder=200))
-        if best_snap_y is not None: self.guide_lines.append(
-            self.ax.axhline(y=best_snap_y, color='#FF8C00', linestyle='--', linewidth=1.5, zorder=200))
+        if not is_grid_snapped:
+            if best_snap_x is not None: self.guide_lines.append(
+                self.ax.axvline(x=best_snap_x, color='#FF8C00', linestyle='--', linewidth=1.5, zorder=200))
+            if best_snap_y is not None: self.guide_lines.append(
+                self.ax.axhline(y=best_snap_y, color='#FF8C00', linestyle='--', linewidth=1.5, zorder=200))
 
         selection = self.listbox.curselection()
         if selection and selection[0] == self.dragging_idx:
@@ -1014,12 +953,13 @@ class GDSMultiStitcherApp:
             self.selected_x_var.set(f"{x:.3f}")
             self.selected_y_var.set(f"{y:.3f}")
 
+        # --- 新增：拖拽过程中实时重叠计算 ---
+        self.draw_overlaps()
+
         self.canvas.draw_idle()
 
     def on_release(self, event):
-        if self.measure_mode_var.get() and event.button == 1:
-            return
-
+        if self.measure_mode_var.get() and event.button == 1: return
         if self.dragging_idx != -1:
             self.dragging_idx = -1
             self.drag_snapshot_taken = False
@@ -1032,6 +972,8 @@ class GDSMultiStitcherApp:
     def show_context_menu(self, idx):
         menu = tk.Menu(self.root, tearoff=0)
         menu.add_command(label=f"Duplicate {self.gds_list[idx]['name']}", command=lambda: self.action_duplicate(idx))
+        menu.add_command(label="Create Array (Step & Repeat)...",
+                         command=lambda: self.action_create_array(idx))  # 新增阵列复制
         menu.add_separator()
         menu.add_command(label="Rotate 90 CCW", command=lambda: self.action_rotate_ccw(idx))
         menu.add_command(label="Rotate 90 CW", command=lambda: self.action_rotate_cw(idx))
@@ -1047,79 +989,124 @@ class GDSMultiStitcherApp:
             'base_bbox': o['base_bbox'], 'trans': o['trans'] * db.DTrans(),
             'offset_x': o['offset_x'] + 200, 'offset_y': o['offset_y'] - 200,
             'color': o['color'], 'patch': None, 'center_text': None,
-            'true_polygons': o['true_polygons'],
-            'poly_patches': []
+            'true_polygons': o['true_polygons'], 'poly_patches': []
         }
         self.gds_list.append(new_gds)
         self.listbox.insert(tk.END, f"[{len(self.gds_list)}] {o['name']}")
         self.draw_preview()
 
+    # --- 核心新增：阵列复制 (Step and Repeat) ---
+    def action_create_array(self, idx):
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Create Array (Step & Repeat)")
+        dialog.geometry("320x220")
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        ttk.Label(dialog, text="Rows (Y Axis):").grid(row=0, column=0, padx=15, pady=10, sticky=tk.W)
+        rows_var = tk.StringVar(value="2")
+        ttk.Entry(dialog, textvariable=rows_var, width=15).grid(row=0, column=1)
+
+        ttk.Label(dialog, text="Columns (X Axis):").grid(row=1, column=0, padx=15, pady=10, sticky=tk.W)
+        cols_var = tk.StringVar(value="2")
+        ttk.Entry(dialog, textvariable=cols_var, width=15).grid(row=1, column=1)
+
+        ttk.Label(dialog, text="Spacing X (um):").grid(row=2, column=0, padx=15, pady=10, sticky=tk.W)
+        spc_x_var = tk.StringVar(value="1000")
+        ttk.Entry(dialog, textvariable=spc_x_var, width=15).grid(row=2, column=1)
+
+        ttk.Label(dialog, text="Spacing Y (um):").grid(row=3, column=0, padx=15, pady=10, sticky=tk.W)
+        spc_y_var = tk.StringVar(value="1000")
+        ttk.Entry(dialog, textvariable=spc_y_var, width=15).grid(row=3, column=1)
+
+        def on_ok():
+            try:
+                rows = int(rows_var.get())
+                cols = int(cols_var.get())
+                spc_x = float(spc_x_var.get())
+                spc_y = float(spc_y_var.get())
+
+                if rows < 1 or cols < 1:
+                    messagebox.showwarning("Warning", "Rows and Columns must be >= 1")
+                    return
+
+                self.save_snapshot()
+                o = self.gds_list[idx]
+
+                for r in range(rows):
+                    for c in range(cols):
+                        if r == 0 and c == 0:
+                            continue  # 跳过原始文件本身
+
+                        new_gds = {
+                            'path': o['path'], 'name': f"{o['name']}_R{r}C{c}",
+                            'base_bbox': o['base_bbox'], 'trans': o['trans'] * db.DTrans(),
+                            'offset_x': o['offset_x'] + c * spc_x,
+                            'offset_y': o['offset_y'] + r * spc_y,
+                            'color': o['color'], 'patch': None, 'center_text': None,
+                            'true_polygons': o['true_polygons'], 'poly_patches': []
+                        }
+                        self.gds_list.append(new_gds)
+                        self.listbox.insert(tk.END, f"[{len(self.gds_list)}] {new_gds['name']}")
+
+                self.draw_preview()
+                self.status_var.set(f"Array created: {rows}x{cols} for {o['name']}")
+                dialog.destroy()
+            except ValueError:
+                messagebox.showerror("Error", "Please enter valid numeric values.")
+
+        ttk.Button(dialog, text="Generate Array", command=on_ok).grid(row=4, column=0, columnspan=2, pady=15)
+
+    # ---------------------------------------------
+
     def action_rotate_ccw(self, i):
         self.save_snapshot()
-        self.gds_list[i]['trans'] = db.DTrans(1, False, 0, 0) * self.gds_list[i][
-            'trans'];
+        self.gds_list[i]['trans'] = db.DTrans(1, False, 0, 0) * self.gds_list[i]['trans'];
         self.draw_preview();
         self.on_listbox_select()
 
     def action_rotate_cw(self, i):
         self.save_snapshot()
-        self.gds_list[i]['trans'] = db.DTrans(3, False, 0, 0) * self.gds_list[i][
-            'trans'];
+        self.gds_list[i]['trans'] = db.DTrans(3, False, 0, 0) * self.gds_list[i]['trans'];
         self.draw_preview();
         self.on_listbox_select()
 
     def action_flip_horizontal(self, i):
         self.save_snapshot()
-        self.gds_list[i]['trans'] = db.DTrans(2, True, 0, 0) * self.gds_list[i][
-            'trans'];
+        self.gds_list[i]['trans'] = db.DTrans(2, True, 0, 0) * self.gds_list[i]['trans'];
         self.draw_preview();
         self.on_listbox_select()
 
     def action_flip_vertical(self, i):
         self.save_snapshot()
-        self.gds_list[i]['trans'] = db.DTrans(0, True, 0, 0) * self.gds_list[i][
-            'trans'];
+        self.gds_list[i]['trans'] = db.DTrans(0, True, 0, 0) * self.gds_list[i]['trans'];
         self.draw_preview();
         self.on_listbox_select()
 
-    # 修复了导出合并 GDS 时同名 Cell 导致 topological_sort 报错的问题
     def execute_stitch(self):
         if not self.gds_list: return
         out_p = filedialog.asksaveasfilename(defaultextension=".gds")
         if not out_p: return
-
         try:
             target_layout = db.Layout()
             merged_top = target_layout.create_cell(self.top_cell_name_var.get() or "MERGED")
             cache = {}
-
             for idx, g in enumerate(self.gds_list):
                 file_path = g['path']
-
                 if file_path not in cache:
                     src_layout = db.Layout()
                     src_layout.read(file_path)
-
-                    if idx == 0:
-                        target_layout.dbu = src_layout.dbu
-
+                    if idx == 0: target_layout.dbu = src_layout.dbu
                     src_top = src_layout.top_cells()[0]
-
                     prefix = f"chip{idx}_"
-                    for cell in src_layout.each_cell():
-                        cell.name = prefix + cell.name
-
+                    for cell in src_layout.each_cell(): cell.name = prefix + cell.name
                     new_cell = target_layout.create_cell(src_top.name)
                     new_cell.copy_tree(src_top)
-
                     cache[file_path] = new_cell.cell_index()
-
                 merged_top.insert(
                     db.DCellInstArray(cache[file_path], db.DTrans(g['offset_x'], g['offset_y']) * g['trans']))
-
             target_layout.write(out_p)
             messagebox.showinfo("OK", "Merged Success!")
-
         except Exception as e:
             messagebox.showerror("Error", f"Failed to export merged GDS:\n{str(e)}")
 
