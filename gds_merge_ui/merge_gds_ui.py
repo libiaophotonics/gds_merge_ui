@@ -10,7 +10,7 @@ matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.patches as patches
-import matplotlib.colors as mcolors  # 新增：用于处理 RGBA 颜色透明度
+import matplotlib.colors as mcolors  # 用于处理 RGBA 颜色透明度
 
 import klayout.db as db
 
@@ -52,7 +52,7 @@ class GDSMultiStitcherApp:
 
         self.measurements = []
 
-        ### 新增：撤销历史栈与拖拽状态标识 ###
+        # 撤销历史栈与拖拽状态标识
         self.undo_stack = []
         self.drag_snapshot_taken = False
 
@@ -66,13 +66,16 @@ class GDSMultiStitcherApp:
         self.anchor_var = tk.StringVar(value="Bottom-Left")
         self.anchor_options = ["Bottom-Left", "Bottom-Right", "Top-Left", "Top-Right", "Center"]
 
+        # 将 Distribution 合并进 Align 选项中
         self.align_options_map = {
             "⇤ Align Left": "left",
             "⇹ Align Center X": "center_x",
             "⇥ Align Right": "right",
             "⇡ Align Top": "top",
             "↕ Align Center Y": "center_y",
-            "⇣ Align Bottom": "bottom"
+            "⇣ Align Bottom": "bottom",
+            "𝌸 Distribute H": "dist_h",
+            "𝌆 Distribute V": "dist_v"
         }
         self.align_var = tk.StringVar(value="⇤ Align Left")
 
@@ -88,20 +91,20 @@ class GDSMultiStitcherApp:
         main_frame = ttk.Frame(self.root, padding=10)
         main_frame.pack(fill=tk.BOTH, expand=True)
 
+        # ================= 左侧控制面板 =================
         left_frame = ttk.Frame(main_frame, width=380)
         left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
         left_frame.pack_propagate(False)
 
-        ### 修改：在工程面板中加入撤销按钮 ###
+        # 1a. 工程读写
         proj_frame = ttk.Frame(left_frame)
         proj_frame.pack(fill=tk.X, pady=(0, 10))
-        ttk.Button(proj_frame, text="📂 Load", command=self.action_load_project).pack(side=tk.LEFT, fill=tk.X,
-                                                                                     expand=True, padx=(0, 2))
-        ttk.Button(proj_frame, text="💾 Save", command=self.action_save_project).pack(side=tk.LEFT, fill=tk.X,
-                                                                                     expand=True, padx=(2, 2))
-        ttk.Button(proj_frame, text="↩️ Undo", command=self.action_undo).pack(side=tk.LEFT, fill=tk.X, expand=True,
-                                                                              padx=(2, 0))
+        ttk.Button(proj_frame, text="📂 Load Project", command=self.action_load_project).pack(side=tk.LEFT, fill=tk.X,
+                                                                                             expand=True, padx=(0, 2))
+        ttk.Button(proj_frame, text="💾 Save Project", command=self.action_save_project).pack(side=tk.LEFT, fill=tk.X,
+                                                                                             expand=True, padx=(2, 0))
 
+        # GDS 列表
         list_frame = ttk.LabelFrame(left_frame, text="1. GDS File List (Ctrl/Shift to Multi-select)", padding=10)
         list_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
 
@@ -124,7 +127,8 @@ class GDSMultiStitcherApp:
 
         self.listbox.bind('<<ListboxSelect>>', self.on_listbox_select)
 
-        block_settings_frame = ttk.LabelFrame(left_frame, text="1b. Block Size & Zoom Settings", padding=10)
+        # 1b. Block 尺寸设置
+        block_settings_frame = ttk.LabelFrame(left_frame, text="1b. Block Size Settings", padding=10)
         block_settings_frame.pack(fill=tk.X, pady=(0, 10))
 
         ttk.Label(block_settings_frame, text="Block Width/Height (um):").pack(anchor=tk.W)
@@ -136,18 +140,9 @@ class GDSMultiStitcherApp:
 
         btn_f2 = ttk.Frame(block_settings_frame)
         btn_f2.pack(fill=tk.X, pady=(5, 0))
-        ttk.Button(btn_f2, text="Apply Size", command=self.update_block_size).pack(side=tk.LEFT, fill=tk.X, expand=True,
-                                                                                   padx=(0, 2))
-        ttk.Button(btn_f2, text="🔍 Zoom Fit", command=lambda: self.draw_preview(reset_view=True)).pack(side=tk.LEFT,
-                                                                                                       fill=tk.X,
-                                                                                                       expand=True,
-                                                                                                       padx=(2, 2))
+        ttk.Button(btn_f2, text="Apply Size", command=self.update_block_size).pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-        ttk.Checkbutton(btn_f2, text="📏 Measure", style="Toolbutton", variable=self.measure_mode_var,
-                        command=self.on_measure_toggle).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(2, 2))
-        ttk.Button(btn_f2, text="🗑️ Clear", command=self.action_clear_measurements).pack(side=tk.LEFT, fill=tk.X,
-                                                                                         expand=True, padx=(0, 0))
-
+        # 1c. 坐标位置调整
         pos_frame = ttk.LabelFrame(left_frame, text="1c. Selected GDS Position (um)", padding=10)
         pos_frame.pack(fill=tk.X, pady=(0, 10))
 
@@ -168,23 +163,7 @@ class GDSMultiStitcherApp:
                                                                                               pady=(10, 0),
                                                                                               sticky=tk.EW)
 
-        align_frame = ttk.LabelFrame(left_frame, text="1d. Align & Distribute (Select Multiple)", padding=10)
-        align_frame.pack(fill=tk.X, pady=(0, 10))
-
-        ttk.Label(align_frame, text="Align:").grid(row=0, column=0, sticky=tk.W, pady=2)
-        align_cb = ttk.Combobox(align_frame, textvariable=self.align_var, values=list(self.align_options_map.keys()),
-                                state="readonly", width=18)
-        align_cb.grid(row=0, column=1, sticky=tk.EW, padx=(0, 5), pady=2)
-        ttk.Button(align_frame, text="▶ Execute Align", command=self.execute_align).grid(row=0, column=2, sticky=tk.EW,
-                                                                                         pady=2)
-
-        ttk.Button(align_frame, text="𝌸 Distribute H (Equal Gap)", command=lambda: self.distribute_selected('h')).grid(
-            row=1, column=0, columnspan=2, sticky=tk.EW, padx=(0, 2), pady=(10, 2))
-        ttk.Button(align_frame, text="𝌆 Distribute V", command=lambda: self.distribute_selected('v')).grid(
-            row=1, column=2, columnspan=1, sticky=tk.EW, padx=(2, 0), pady=(10, 2))
-
-        align_frame.columnconfigure(1, weight=1)
-
+        # 2. 导出设置
         output_frame = ttk.LabelFrame(left_frame, text="2. Export Settings", padding=10)
         output_frame.pack(fill=tk.X, pady=(0, 10))
         ttk.Label(output_frame, text="Merged Top Cell Name:").pack(anchor=tk.W)
@@ -192,30 +171,64 @@ class GDSMultiStitcherApp:
         ttk.Button(output_frame, text="💾 Export Merged GDS", command=self.execute_stitch).pack(fill=tk.X, pady=5,
                                                                                                ipady=5)
 
+        # ================= 右侧交互面板 (画布区域) =================
         right_frame = ttk.LabelFrame(main_frame, text="Interactive Canvas", padding=5)
         right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
 
+        # --- 画图界面的顶部工具栏（单行排版） ---
+        canvas_toolbar = ttk.Frame(right_frame)
+        canvas_toolbar.pack(side=tk.TOP, fill=tk.X, pady=(0, 5))
+
+        # 1. 视图与基础交互
+        ttk.Button(canvas_toolbar, text="↩️ Undo", command=self.action_undo).pack(side=tk.LEFT, padx=(0, 2))
+        ttk.Button(canvas_toolbar, text="🔍 Zoom Fit", command=lambda: self.draw_preview(reset_view=True)).pack(
+            side=tk.LEFT, padx=2)
+        ttk.Checkbutton(canvas_toolbar, text="📏 Measure", style="Toolbutton", variable=self.measure_mode_var,
+                        command=self.on_measure_toggle).pack(side=tk.LEFT, padx=2)
+
+        # 修改为 Clear Measurement
+        ttk.Button(canvas_toolbar, text="🗑️ Clear Measurement", command=self.action_clear_measurements).pack(
+            side=tk.LEFT, padx=2)
+
+        # 分割线
+        ttk.Separator(canvas_toolbar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=8, pady=2)
+
+        # 2. 对齐与分布
+        ttk.Label(canvas_toolbar, text="Align/Dist:").pack(side=tk.LEFT, padx=(0, 2))
+
+        # 加宽下拉框，包含对齐和分布选项
+        align_cb = ttk.Combobox(canvas_toolbar, textvariable=self.align_var, values=list(self.align_options_map.keys()),
+                                state="readonly", width=16)
+        align_cb.pack(side=tk.LEFT, padx=(0, 2))
+
+        # 修改为 Execute Alignment
+        ttk.Button(canvas_toolbar, text="▶ Execute Alignment", command=self.execute_align).pack(side=tk.LEFT,
+                                                                                                padx=(0, 5))
+        # -----------------------------------------------
+
+        # 画布初始化
         self.figure = plt.Figure(figsize=(6, 5), dpi=100)
         self.ax = self.figure.add_subplot(111)
         self.canvas = FigureCanvasTkAgg(self.figure, right_frame)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
+        # 绑定事件
         self.canvas.mpl_connect('button_press_event', self.on_press)
         self.canvas.mpl_connect('motion_notify_event', self.on_motion)
         self.canvas.mpl_connect('button_release_event', self.on_release)
         self.canvas.mpl_connect('scroll_event', self.on_scroll)
 
+        # 底部状态栏
         status_bar = ttk.Label(self.root, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W)
         status_bar.pack(side=tk.BOTTOM, fill=tk.X)
 
-    ### 新增功能：保存当前状态快照 (用于 Undo) ###
+    # 保存当前状态快照 (用于 Undo)
     def save_snapshot(self):
         snapshot = {
             'gds_list': [],
             'measurements': [dict(m) for m in self.measurements]
         }
         for gds in self.gds_list:
-            # 使用乘以恒等矩阵的方式安全地深拷贝 KLayout DTrans 对象
             trans_copy = gds['trans'] * db.DTrans()
             snap_gds = {
                 'path': gds['path'],
@@ -230,18 +243,16 @@ class GDSMultiStitcherApp:
             snapshot['gds_list'].append(snap_gds)
 
         self.undo_stack.append(snapshot)
-        # 限制撤销步数为最大 30 步，避免内存溢出
         if len(self.undo_stack) > 30:
             self.undo_stack.pop(0)
 
-    ### 新增功能：执行撤销 ###
+    # 执行撤销
     def action_undo(self):
         if not self.undo_stack:
             self.status_var.set("Nothing to undo.")
             return
 
         snapshot = self.undo_stack.pop()
-
         self.gds_list.clear()
         self.listbox.delete(0, tk.END)
 
@@ -319,7 +330,6 @@ class GDSMultiStitcherApp:
             with open(filepath, 'r', encoding='utf-8') as f:
                 project_data = json.load(f)
 
-            # 清理当前状态并清空撤销栈
             self.gds_list.clear()
             self.listbox.delete(0, tk.END)
             self.measurements = project_data.get("measurements", [])
@@ -388,8 +398,13 @@ class GDSMultiStitcherApp:
     def execute_align(self):
         selected_option = self.align_var.get()
         mode = self.align_options_map.get(selected_option)
-        if mode:
+
+        if mode in ['left', 'right', 'center_x', 'bottom', 'top', 'center_y']:
             self.align_selected(mode)
+        elif mode == 'dist_h':
+            self.distribute_selected('h')
+        elif mode == 'dist_v':
+            self.distribute_selected('v')
 
     def align_selected(self, mode):
         selection = self.listbox.curselection()
@@ -397,7 +412,7 @@ class GDSMultiStitcherApp:
             messagebox.showwarning("Warning", "Please select at least 2 GDS files (Ctrl/Shift + Click) to align.")
             return
 
-        self.save_snapshot()  ### 插入快照 ###
+        self.save_snapshot()
         bboxes = [self.get_bbox(self.gds_list[i]) for i in selection]
 
         if mode == 'left':
@@ -443,7 +458,7 @@ class GDSMultiStitcherApp:
             messagebox.showwarning("Warning", "Please select at least 3 GDS files to distribute evenly.")
             return
 
-        self.save_snapshot()  ### 插入快照 ###
+        self.save_snapshot()
         items = []
         for i in selection:
             gds = self.gds_list[i]
@@ -489,7 +504,7 @@ class GDSMultiStitcherApp:
             self.canvas.draw_idle()
 
     def action_clear_measurements(self):
-        self.save_snapshot()  ### 插入快照 ###
+        self.save_snapshot()
         self.measurements.clear()
         self.clear_active_measurement()
         self.draw_preview(reset_view=False)
@@ -576,7 +591,7 @@ class GDSMultiStitcherApp:
             messagebox.showwarning("Warning", "Please select a GDS from the list first.")
             return
 
-        self.save_snapshot()  ### 插入快照 ###
+        self.save_snapshot()
         idx = selection[0]
         try:
             new_x = float(self.selected_x_var.get())
@@ -624,7 +639,7 @@ class GDSMultiStitcherApp:
         paths = filedialog.askopenfilenames(filetypes=[("GDS Files", "*.gds")])
         for p in paths:
             try:
-                self.save_snapshot()  ### 插入快照 ###
+                self.save_snapshot()
 
                 base_name = os.path.splitext(os.path.basename(p))[0]
                 self.status_var.set(f"Parsing true contour for {base_name}... Please wait.")
@@ -651,7 +666,7 @@ class GDSMultiStitcherApp:
     def action_delete_selected(self):
         selection = self.listbox.curselection()
         if selection:
-            self.save_snapshot()  ### 插入快照 ###
+            self.save_snapshot()
             for idx in sorted(selection, reverse=True):
                 del self.gds_list[idx]
             self.listbox.delete(0, tk.END)
@@ -699,7 +714,7 @@ class GDSMultiStitcherApp:
             sx, sy = t_box.left + gds['offset_x'], t_box.bottom + gds['offset_y']
             w, h = t_box.width(), t_box.height()
 
-            # 矩形外轮廓保留原本逻辑 (包含 alpha=0.6)
+            # 外边框矩形（维持 0.6 的透明度）
             rect = patches.Rectangle((sx, sy), w, h, linewidth=0.5, edgecolor=gds['color'], facecolor=gds['color'],
                                      alpha=0.6, zorder=10)
             self.ax.add_patch(rect)
@@ -712,17 +727,14 @@ class GDSMultiStitcherApp:
                     t_pt = gds['trans'] * db.DPoint(px, py)
                     transformed_pts.append((t_pt.x + gds['offset_x'], t_pt.y + gds['offset_y']))
 
-                # ===== 修改部分开始 =====
-                # 将颜色转换为 RGBA，分别控制内部填充(facecolor)与轮廓线(edgecolor)的透明度
+                # 转换颜色为 RGBA，控制边框和填充的透明度
                 edge_c = mcolors.to_rgba(gds['color'], alpha=0.7)
                 face_c = mcolors.to_rgba('black', alpha=0.3)
 
-                # 内轮廓线用实线(linestyle='-')
+                # 多边形内部使用实线与黑色填充
                 poly_patch = patches.Polygon(transformed_pts, closed=True, fill=True,
                                              facecolor=face_c, edgecolor=edge_c,
                                              linestyle='-', linewidth=0.8, zorder=15)
-                # ===== 修改部分结束 =====
-
                 self.ax.add_patch(poly_patch)
                 gds['poly_patches'].append((pts, poly_patch))
 
@@ -826,7 +838,7 @@ class GDSMultiStitcherApp:
                                                     markeredgewidth=2, zorder=305)
                 self.measure_state = 1
             elif self.measure_state == 1:
-                self.save_snapshot()  ### 插入快照：记录绘制测量线前的状态 ###
+                self.save_snapshot()
                 x0, y0 = self.measure_start_pt
                 self.measurements.append({'x0': x0, 'y0': y0, 'x1': snap_x, 'y1': snap_y})
 
@@ -920,7 +932,6 @@ class GDSMultiStitcherApp:
 
         if self.dragging_idx == -1: return
 
-        ### 插入快照：只在拖拽“开始发生的第一帧”保存一次状态，避免历史栈被塞满 ###
         if not self.drag_snapshot_taken:
             self.save_snapshot()
             self.drag_snapshot_taken = True
@@ -1011,7 +1022,7 @@ class GDSMultiStitcherApp:
 
         if self.dragging_idx != -1:
             self.dragging_idx = -1
-            self.drag_snapshot_taken = False  ### 重置拖拽快照标识 ###
+            self.drag_snapshot_taken = False
             self.drag_start_offsets.clear()
             for line in self.guide_lines: line.remove()
             self.guide_lines.clear()
@@ -1029,7 +1040,7 @@ class GDSMultiStitcherApp:
         menu.post(int(self.root.winfo_pointerx()), int(self.root.winfo_pointery()))
 
     def action_duplicate(self, idx):
-        self.save_snapshot()  ### 插入快照 ###
+        self.save_snapshot()
         o = self.gds_list[idx]
         new_gds = {
             'path': o['path'], 'name': o['name'],
@@ -1044,40 +1055,40 @@ class GDSMultiStitcherApp:
         self.draw_preview()
 
     def action_rotate_ccw(self, i):
-        self.save_snapshot()  ### 插入快照 ###
+        self.save_snapshot()
         self.gds_list[i]['trans'] = db.DTrans(1, False, 0, 0) * self.gds_list[i][
             'trans'];
         self.draw_preview();
         self.on_listbox_select()
 
     def action_rotate_cw(self, i):
-        self.save_snapshot()  ### 插入快照 ###
+        self.save_snapshot()
         self.gds_list[i]['trans'] = db.DTrans(3, False, 0, 0) * self.gds_list[i][
             'trans'];
         self.draw_preview();
         self.on_listbox_select()
 
     def action_flip_horizontal(self, i):
-        self.save_snapshot()  ### 插入快照 ###
+        self.save_snapshot()
         self.gds_list[i]['trans'] = db.DTrans(2, True, 0, 0) * self.gds_list[i][
             'trans'];
         self.draw_preview();
         self.on_listbox_select()
 
     def action_flip_vertical(self, i):
-        self.save_snapshot()  ### 插入快照 ###
+        self.save_snapshot()
         self.gds_list[i]['trans'] = db.DTrans(0, True, 0, 0) * self.gds_list[i][
             'trans'];
         self.draw_preview();
         self.on_listbox_select()
 
+    # 修复了导出合并 GDS 时同名 Cell 导致 topological_sort 报错的问题
     def execute_stitch(self):
         if not self.gds_list: return
         out_p = filedialog.asksaveasfilename(defaultextension=".gds")
         if not out_p: return
 
         try:
-            # 1. 创建最终要导出的目标 Layout
             target_layout = db.Layout()
             merged_top = target_layout.create_cell(self.top_cell_name_var.get() or "MERGED")
             cache = {}
@@ -1086,32 +1097,26 @@ class GDSMultiStitcherApp:
                 file_path = g['path']
 
                 if file_path not in cache:
-                    # 2. 将每个GDS读取到【独立】的临时 Layout 中，避免交叉污染和 topological 报错
                     src_layout = db.Layout()
                     src_layout.read(file_path)
 
-                    # 继承第一个加载的 GDS 的精度 (DBU)，防止坐标漂移或缩放错误
                     if idx == 0:
                         target_layout.dbu = src_layout.dbu
 
                     src_top = src_layout.top_cells()[0]
 
-                    # 3. 遍历并重命名源 Layout 中的所有 Cell，加上前缀，防止不同 GDS 之间同名子单元冲突
                     prefix = f"chip{idx}_"
                     for cell in src_layout.each_cell():
                         cell.name = prefix + cell.name
 
-                    # 4. 在目标 Layout 中创建一个空 Cell，并将源树整体安全地拷贝过来
                     new_cell = target_layout.create_cell(src_top.name)
                     new_cell.copy_tree(src_top)
 
                     cache[file_path] = new_cell.cell_index()
 
-                # 5. 在总的 MERGED Top cell 中实例化
                 merged_top.insert(
                     db.DCellInstArray(cache[file_path], db.DTrans(g['offset_x'], g['offset_y']) * g['trans']))
 
-            # 导出最终文件
             target_layout.write(out_p)
             messagebox.showinfo("OK", "Merged Success!")
 
