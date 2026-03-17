@@ -47,6 +47,9 @@ class GDSMultiStitcherApp:
         self.measure_state = 0
         self.snap_indicator = None
 
+        ### 新增的部分：用于永久保存每一次测量结果的数据列表 ###
+        self.measurements = []
+
         self.block_width_var = tk.StringVar(value="5000.0")
         self.block_height_var = tk.StringVar(value="5000.0")
         self.block_width = 5000.0
@@ -112,8 +115,12 @@ class GDSMultiStitcherApp:
                                                                                                        fill=tk.X,
                                                                                                        expand=True,
                                                                                                        padx=(2, 2))
+
+        ### 修改的部分：调整按钮布局，加入 Clear 按钮 ###
         ttk.Checkbutton(btn_f2, text="📏 Measure", style="Toolbutton", variable=self.measure_mode_var,
-                        command=self.on_measure_toggle).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(2, 0))
+                        command=self.on_measure_toggle).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(2, 2))
+        ttk.Button(btn_f2, text="🗑️ Clear", command=self.action_clear_measurements).pack(side=tk.LEFT, fill=tk.X,
+                                                                                         expand=True, padx=(0, 0))
 
         pos_frame = ttk.LabelFrame(left_frame, text="1c. Selected GDS Position (μm)", padding=10)
         pos_frame.pack(fill=tk.X, pady=(0, 10))
@@ -164,11 +171,18 @@ class GDSMultiStitcherApp:
             self.listbox.selection_clear(0, tk.END)
         else:
             self.status_var.set("Measure Mode OFF.")
-            self.clear_measurement()
+            self.clear_active_measurement()  # 只清除正在画的一半线，不清除历史记录
             self.canvas.draw_idle()
 
-    ### 修改的部分：清理时也要把青色参考线清掉 ###
-    def clear_measurement(self):
+    ### 新增的部分：一键清除所有测量痕迹 ###
+    def action_clear_measurements(self):
+        self.measurements.clear()
+        self.clear_active_measurement()
+        self.draw_preview(reset_view=False)
+        self.status_var.set("All measurements cleared.")
+
+    ### 修改的部分：函数名改为 clear_active_measurement，专用于清理半途而废的临时线 ###
+    def clear_active_measurement(self):
         if self.measure_line:
             try:
                 self.measure_line.remove()
@@ -194,6 +208,7 @@ class GDSMultiStitcherApp:
                 pass
         self.guide_lines.clear()
         self.measure_state = 0
+        self.measure_start_pt = None
 
     def get_anchor_coords(self, gds, anchor_type):
         t_box = gds['trans'] * gds['base_bbox']
@@ -303,9 +318,12 @@ class GDSMultiStitcherApp:
         cur_xlim, cur_ylim = self.ax.get_xlim(), self.ax.get_ylim()
         self.ax.clear()
 
+        # 因为整个画布被清空，重置未完成的工具状态
         self.measure_line = None
         self.measure_text = None
         self.snap_indicator = None
+        self.measure_state = 0
+        self.measure_start_pt = None
 
         for spine in self.ax.spines.values(): spine.set_visible(False)
 
@@ -360,6 +378,17 @@ class GDSMultiStitcherApp:
                                               fontsize=dynamic_fs, color='black', fontweight='bold', alpha=0.7,
                                               zorder=90)
 
+        ### 新增的部分：在重绘画布时，把历史保存的所有测量线条和文本画出来 ###
+        for m in self.measurements:
+            x0, y0, x1, y1 = m['x0'], m['y0'], m['x1'], m['y1']
+            self.ax.plot([x0, x1], [y0, y1], color='#FF1493', linestyle='--', linewidth=2, zorder=300)
+            dist = math.hypot(x1 - x0, y1 - y0)
+            dx = abs(x1 - x0)
+            dy = abs(y1 - y0)
+            self.ax.text(x1, y1, f" L: {dist:.2f}\n dx: {dx:.2f}\n dy: {dy:.2f}", color='#FF1493', fontsize=10,
+                         fontweight='bold', zorder=301,
+                         bbox=dict(facecolor='white', alpha=0.8, edgecolor='none', pad=2))
+
         if reset_view:
             self.ax.set_xlim(-self.block_width * 0.1, self.block_width * 1.1)
             self.ax.set_ylim(-self.block_height * 0.1, self.block_height * 1.1)
@@ -389,7 +418,6 @@ class GDSMultiStitcherApp:
         b, t = t_box.bottom + oy, t_box.top + oy
         return [l, r, (l + r) / 2], [b, t, (b + t) / 2]
 
-    ### 修改的部分：分离 X 和 Y 轴的吸附，实现交叉点智能捕捉 ###
     def get_snapped_coordinate(self, x, y):
         cur_xlim = self.ax.get_xlim()
         cur_ylim = self.ax.get_ylim()
@@ -407,14 +435,12 @@ class GDSMultiStitcherApp:
             b, t = t_box.bottom + oy, t_box.top + oy
             cx, cy = (l + r) / 2, (b + t) / 2
 
-            # 遍历检查 X 轴上的吸附
             for px in [l, r, cx]:
                 if abs(x - px) < min_dx:
                     min_dx = abs(x - px)
                     best_x = px
                     snapped_x = True
 
-            # 遍历检查 Y 轴上的吸附
             for py in [b, t, cy]:
                 if abs(y - py) < min_dy:
                     min_dy = abs(y - py)
@@ -430,7 +456,7 @@ class GDSMultiStitcherApp:
             snap_x, snap_y, _, _ = self.get_snapped_coordinate(event.xdata, event.ydata)
 
             if self.measure_state == 0:
-                self.clear_measurement()
+                self.clear_active_measurement()
                 self.measure_start_pt = (snap_x, snap_y)
 
                 self.measure_line, = self.ax.plot([snap_x, snap_x], [snap_y, snap_y], color='#FF1493', linestyle='--',
@@ -442,9 +468,17 @@ class GDSMultiStitcherApp:
                                                     markeredgewidth=2, zorder=305)
                 self.measure_state = 1
             elif self.measure_state == 1:
+                ### 修改的部分：完成测量时，将坐标点位保存到历史记录，并将当前画布上的画笔解绑 ###
+                x0, y0 = self.measure_start_pt
+                self.measurements.append({'x0': x0, 'y0': y0, 'x1': snap_x, 'y1': snap_y})
+
                 self.measure_state = 0
                 if self.snap_indicator:
                     self.snap_indicator.set_data([], [])
+
+                # 解绑，使其不会被 clear_active_measurement 清理，留在画布上
+                self.measure_line = None
+                self.measure_text = None
 
             self.canvas.draw_idle()
             return
@@ -470,11 +504,9 @@ class GDSMultiStitcherApp:
     def on_motion(self, event):
         if not event.inaxes: return
 
-        ### 修改的部分：加入测量模式下的青色动态参考线 ###
         if self.measure_mode_var.get():
             snap_x, snap_y, sn_x, sn_y = self.get_snapped_coordinate(event.xdata, event.ydata)
 
-            # 1. 更新红十字指示器
             if not self.snap_indicator:
                 self.snap_indicator, = self.ax.plot([snap_x], [snap_y], marker='+', color='red', markersize=12,
                                                     markeredgewidth=2, zorder=305)
@@ -482,16 +514,14 @@ class GDSMultiStitcherApp:
                 if self.measure_state == 0 or (self.measure_state == 1):
                     self.snap_indicator.set_data([snap_x], [snap_y])
 
-            # 2. 更新对齐参考线 (测量时专用的青色对齐线)
             for line in self.guide_lines: line.remove()
             self.guide_lines.clear()
 
             if sn_x: self.guide_lines.append(
-                self.ax.axvline(x=snap_x, color='#00CED1', linestyle=':', linewidth=1.5, zorder=200))  # 青色竖线
+                self.ax.axvline(x=snap_x, color='#00CED1', linestyle=':', linewidth=1.5, zorder=200))
             if sn_y: self.guide_lines.append(
-                self.ax.axhline(y=snap_y, color='#00CED1', linestyle=':', linewidth=1.5, zorder=200))  # 青色横线
+                self.ax.axhline(y=snap_y, color='#00CED1', linestyle=':', linewidth=1.5, zorder=200))
 
-            # 3. 更新粉色的实际测量线和数值
             if self.measure_state == 1 and self.measure_start_pt is not None:
                 x0, y0 = self.measure_start_pt
                 self.measure_line.set_data([x0, snap_x], [y0, snap_y])
