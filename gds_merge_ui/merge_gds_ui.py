@@ -749,7 +749,7 @@ class GDSMultiStitcherApp:
 
         for m in self.measurements:
             x0, y0, x1, y1 = m['x0'], m['y0'], m['x1'], m['y1']
-            self.ax.plot([x0, x1], [y0, y1], color='#FF1493', linestyle='--', linewidth=2, zorder=300)
+            self.ax.plot([x0, x1], [y0, y1], color='#FF1493', linestyle='--', linewidth=1, zorder=300)
             dist = math.hypot(x1 - x0, y1 - y0)
             dx = abs(x1 - x0)
             dy = abs(y1 - y0)
@@ -830,7 +830,7 @@ class GDSMultiStitcherApp:
                 self.measure_start_pt = (snap_x, snap_y)
 
                 self.measure_line, = self.ax.plot([snap_x, snap_x], [snap_y, snap_y], color='#FF1493', linestyle='--',
-                                                  linewidth=2, zorder=300)
+                                                  linewidth=1, zorder=300)
                 self.measure_text = self.ax.text(snap_x, snap_y, '', color='#FF1493', fontsize=10, fontweight='bold',
                                                  zorder=301,
                                                  bbox=dict(facecolor='white', alpha=0.8, edgecolor='none', pad=2))
