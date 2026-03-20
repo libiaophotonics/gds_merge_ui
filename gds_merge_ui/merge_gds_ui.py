@@ -18,6 +18,50 @@ plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans', 'Arial', 'Microsoft 
 plt.rcParams['axes.unicode_minus'] = False
 
 
+# ================= 新增：后台多线程加载 Worker =================
+class GDSLoadWorker(QtCore.QThread):
+    result_ready = QtCore.pyqtSignal(dict)
+    error_occurred = QtCore.pyqtSignal(str, str)
+
+    def __init__(self, filepath):
+        super().__init__()
+        self.filepath = filepath
+
+    def run(self):
+        try:
+            layout = db.Layout()
+            layout.read(self.filepath)
+            top_cell = layout.top_cells()[0]
+            base_bbox = top_cell.dbbox()
+
+            layers = [(layout.get_info(li).layer, layout.get_info(li).datatype) for li in layout.layer_indexes()]
+            region = db.Region()
+            for li in layout.layer_indexes():
+                region.insert(top_cell.begin_shapes_rec(li))
+            region.merge()
+            region = region.hulls()
+
+            trans = db.DCplxTrans(layout.dbu)
+            true_polygons = [[(pt.x, pt.y) for pt in db.DPolygon(poly).transformed(trans).each_point_hull()]
+                             for poly in region.each() if list(db.DPolygon(poly).transformed(trans).each_point_hull())]
+
+            result = {
+                'filepath': self.filepath,
+                # 拆解 bbox 以避免 C++ 对象跨线程被垃圾回收销毁的风险
+                'bbox_left': base_bbox.left, 'bbox_bottom': base_bbox.bottom,
+                'bbox_right': base_bbox.right, 'bbox_top': base_bbox.top,
+                'true_polygons': true_polygons,
+                'layers': layers
+            }
+            self.result_ready.emit(result)
+        except Exception as e:
+            import traceback
+            self.error_occurred.emit(self.filepath, traceback.format_exc())
+
+
+# ==============================================================
+
+
 class GDSMergerProQt(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
@@ -29,6 +73,8 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         self.user_texts, self.user_shapes = [], []
         self.crop_box = None
         self.layer_mapping = {}
+
+        self.workers = []  # 存放后台加载线程的池子
 
         self.dragging_type, self.dragging_idx = None, -1
         self.active_shape_type, self.active_shape_idx = None, -1
@@ -72,13 +118,10 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             event.ignore()
 
     def dropEvent(self, event):
-        added = False
         for url in event.mimeData().urls():
             filepath = url.toLocalFile()
             if filepath.lower().endswith('.gds'):
                 self.process_single_gds(filepath)
-                added = True
-        if added: self.draw_preview(reset_view=True)
 
     def setup_ui(self):
         self.main_splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
@@ -276,7 +319,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         btn_clear.clicked.connect(self.action_clear_annotations)
         tb2.addWidget(btn_clear)
 
-        # 新增布尔运算按钮
         btn_bool = QtWidgets.QPushButton("🔣 Boolean")
         btn_bool.setStyleSheet("color: #FF8C00; font-weight: bold;")
         btn_bool.clicked.connect(self.action_boolean_dialog)
@@ -336,24 +378,59 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         for gds in self.gds_list: global_layers.update(gds.get('layers', []))
         for l, d in sorted(list(global_layers)): self.layer_list.addItem(f"{l}/{d}")
 
+    # ================= 修改为使用 QThread 异步加载 =================
     def process_single_gds(self, filepath):
-        try:
-            self.save_snapshot()
-            base_name = os.path.splitext(os.path.basename(filepath))[0]
-            base_bbox, true_polygons, layers = self.parse_gds_info(filepath)
-            cx_block, cy_block = self.block_w / 2.0, self.block_h / 2.0
-            cx_gds, cy_gds = (base_bbox.left + base_bbox.right) / 2.0, (base_bbox.bottom + base_bbox.top) / 2.0
-            gds_info = {'path': filepath, 'name': base_name, 'base_bbox': base_bbox, 'trans': db.DTrans(),
-                        'offset_x': cx_block - cx_gds, 'offset_y': cy_block - cy_gds,
-                        'color': self.color_palette[len(self.gds_list) % len(self.color_palette)],
-                        'patch': None, 'shadow_patch': None, 'collection': None, 'center_text': None,
-                        'true_polygons': true_polygons, 'layers': layers}
-            self.gds_list.append(gds_info)
-            self.list_widget.addItem(f"[{len(self.gds_list)}] {base_name}")
-            self.refresh_layer_list()
-        except Exception as e:
-            QtWidgets.QMessageBox.critical(self, "Error", f"Failed to load {filepath}:\n{str(e)}")
+        # 提示用户正在后台加载，并且不会阻塞 UI
+        self.status_label.setText(f"⏳ 正在后台极速解析: {os.path.basename(filepath)} ...")
+        QtWidgets.QApplication.processEvents()
 
+        # 创建后台线程 Worker
+        worker = GDSLoadWorker(filepath)
+        worker.result_ready.connect(self.on_gds_loaded)
+        worker.error_occurred.connect(self.on_gds_load_error)
+
+        # 保持引用，防止线程被垃圾回收
+        self.workers.append(worker)
+        worker.start()
+
+    def on_gds_loaded(self, result):
+        # 线程结束后的回调清理
+        worker = self.sender()
+        if worker in self.workers:
+            self.workers.remove(worker)
+
+        self.save_snapshot()
+        filepath = result['filepath']
+        base_name = os.path.splitext(os.path.basename(filepath))[0]
+
+        base_bbox = db.DBox(result['bbox_left'], result['bbox_bottom'], result['bbox_right'], result['bbox_top'])
+        true_polygons = result['true_polygons']
+        layers = result['layers']
+
+        cx_block, cy_block = self.block_w / 2.0, self.block_h / 2.0
+        cx_gds, cy_gds = (base_bbox.left + base_bbox.right) / 2.0, (base_bbox.bottom + base_bbox.top) / 2.0
+
+        gds_info = {'path': filepath, 'name': base_name, 'base_bbox': base_bbox, 'trans': db.DTrans(),
+                    'offset_x': cx_block - cx_gds, 'offset_y': cy_block - cy_gds,
+                    'color': self.color_palette[len(self.gds_list) % len(self.color_palette)],
+                    'patch': None, 'shadow_patch': None, 'collection': None, 'center_text': None,
+                    'true_polygons': true_polygons, 'layers': layers}
+
+        self.gds_list.append(gds_info)
+        self.list_widget.addItem(f"[{len(self.gds_list)}] {base_name}")
+        self.refresh_layer_list()
+
+        self.status_label.setText("Ready (后台解析完成)")
+        self.draw_preview(reset_view=True)
+
+    def on_gds_load_error(self, filepath, error_msg):
+        worker = self.sender()
+        if worker in self.workers:
+            self.workers.remove(worker)
+        self.status_label.setText("Ready (加载失败)")
+        QtWidgets.QMessageBox.critical(self, "Error", f"Failed to load {filepath}:\n{error_msg}")
+
+    # 对于原有的 parse_gds_info，为了兼容工程文件加载，依然保留它
     def parse_gds_info(self, filepath):
         layout = db.Layout()
         layout.read(filepath)
@@ -371,9 +448,8 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
 
     def add_gds(self):
         paths, _ = QtWidgets.QFileDialog.getOpenFileNames(self, "Open GDS", "", "GDS Files (*.gds)")
-        added = False
-        for p in paths: self.process_single_gds(p); added = True
-        if added: self.draw_preview(reset_view=True)
+        for p in paths:
+            self.process_single_gds(p)
 
     def on_bbox_toggle(self):
         self.btn_bbox.setText("✅ BBox Only" if self.btn_bbox.isChecked() else "🔲 Full Detail")
@@ -492,6 +568,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             for i, item in enumerate(project_data.get("gds_items", [])):
                 path, name = item.get("path"), item.get("name")
                 if not os.path.exists(path): continue
+                # 加载工程时直接使用原来的同步加载
                 base_bbox, true_polygons, layers = self.parse_gds_info(path)
                 trans = db.DTrans(item["trans_rot"], item["trans_mirror"], item["trans_dx"], item["trans_dy"])
                 gds_info = {'path': path, 'name': name, 'base_bbox': base_bbox, 'trans': trans,
