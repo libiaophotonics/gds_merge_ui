@@ -1,4 +1,4 @@
-import os, math, json, sys
+import os, math, json, sys, tempfile
 from PyQt5 import QtWidgets, QtCore, QtGui
 import matplotlib
 
@@ -31,7 +31,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         self.layer_mapping = {}
 
         self.dragging_type, self.dragging_idx = None, -1
-        # --- 新增：用于记录当前选中的辅助形状或文字 ---
         self.active_shape_type, self.active_shape_idx = None, -1
 
         self.drag_start_x = self.drag_start_y = self.rect_start_x = self.rect_start_y = 0
@@ -276,6 +275,13 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         btn_clear = QtWidgets.QPushButton("🗑️ Clear");
         btn_clear.clicked.connect(self.action_clear_annotations);
         tb2.addWidget(btn_clear)
+
+        # 新增布尔运算按钮
+        btn_bool = QtWidgets.QPushButton("🔣 Boolean")
+        btn_bool.setStyleSheet("color: #FF8C00; font-weight: bold;")
+        btn_bool.clicked.connect(self.action_boolean_dialog)
+        tb2.addWidget(btn_bool)
+
         self.cb_align_go = QtWidgets.QComboBox();
         self.cb_align_go.addItems(
             ["Align Left", "Align Center X", "Align Right", "Align Top", "Align Center Y", "Align Bottom",
@@ -293,11 +299,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         self.ax.set_facecolor('#1e1e1e')
         self.canvas = FigureCanvas(self.figure)
         self.canvas.setFocusPolicy(QtCore.Qt.StrongFocus)
-
-        # 1. 明确告诉 PyQt5，这个画布在水平和垂直方向上都可以尽可能地扩展
         self.canvas.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
-
-        # 2. 在加入布局时，传入拉伸因子 '1'。这会让画布吸纳所有剩余的空白空间，把底部的状态栏挤到最下面
         center_layout.addWidget(self.canvas, 1)
 
         self.canvas.mpl_connect('button_press_event', self.on_press)
@@ -423,7 +425,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         self.gds_list.clear();
         self.list_widget.clear()
 
-        # 撤销时一并清空形状的选择状态
         self.active_shape_type = None
         self.active_shape_idx = -1
 
@@ -687,9 +688,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         self.canvas.draw_idle();
         self.status_label.setText("Ready")
 
-    # ================= 修改处：将 user_shapes 纳入统一视觉高亮体系 =================
     def update_canvas_selection(self):
-        # 1. 更新 GDS 器件的高亮状态
         selected_indices = [self.list_widget.row(item) for item in self.list_widget.selectedItems()]
         for i, gds in enumerate(self.gds_list):
             if gds.get('patch'):
@@ -714,7 +713,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                         gds['collection'].set_edgecolor(mcolors.to_rgba(gds['color'], alpha=0.9))
                         gds['collection'].set_linewidth(0.5)
 
-        # 2. 更新手动绘制的文字和形状 (user_texts, user_shapes) 的高亮状态
         for i, ut in enumerate(self.user_texts):
             if 'text_obj' in ut and ut['text_obj']:
                 if getattr(self, 'active_shape_type', None) == 'text' and getattr(self, 'active_shape_idx', -1) == i:
@@ -727,11 +725,10 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         for i, s in enumerate(self.user_shapes):
             if 'patch' in s and s['patch']:
                 if getattr(self, 'active_shape_type', None) == 'shape' and getattr(self, 'active_shape_idx', -1) == i:
-                    s['patch'].set_edgecolor('white')  # 选中时变为白色边框
-                    s['patch'].set_linewidth(3.0)  # 加粗
-                    s['patch'].set_linestyle('--')  # 虚线标记
+                    s['patch'].set_edgecolor('white')
+                    s['patch'].set_linewidth(3.0)
+                    s['patch'].set_linestyle('--')
                 else:
-                    # 恢复默认样式
                     ec = '#FF8C00' if s['type'] == 'box' else '#00CED1'
                     if s['type'] == 'polygon': ec = '#32CD32'
                     if s['type'] == 'path': ec = '#9370DB'
@@ -849,7 +846,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         if self.btn_measure.isChecked():
             self.cancel_draw_mode()
             self.status_label.setText("Measure Mode ON: Click once to start, click again to finish.")
-            # 使用阻塞信号来防止状态死循环
             self.list_widget.blockSignals(True)
             self.list_widget.clearSelection()
             self.list_widget.blockSignals(False)
@@ -867,10 +863,8 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         self.user_shapes.clear();
         self.crop_box = None
         self.clear_active_measurement();
-
         self.active_shape_type = None
         self.active_shape_idx = -1
-
         self.draw_preview(reset_view=False)
 
     def clear_active_measurement(self):
@@ -949,9 +943,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         except:
             pass
 
-    # ================= 修改处：让 Delete 键和 Del 按钮可以删除形状 =================
     def action_delete_selected(self):
-        # 1. 优先检查是否选中了自定义文字
         if getattr(self, 'active_shape_type', None) == 'text' and self.active_shape_idx != -1:
             self.save_snapshot()
             del self.user_texts[self.active_shape_idx]
@@ -960,7 +952,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             self.draw_preview(reset_view=False)
             return
 
-        # 2. 检查是否选中了辅助形状(Box, ViaArray等)
         if getattr(self, 'active_shape_type', None) == 'shape' and self.active_shape_idx != -1:
             self.save_snapshot()
             del self.user_shapes[self.active_shape_idx]
@@ -969,7 +960,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             self.draw_preview(reset_view=False)
             return
 
-        # 3. 如果没选中辅助图形，就走原来的逻辑去删选中的 GDS
         selection = sorted([self.list_widget.row(item) for item in self.list_widget.selectedItems()], reverse=True)
         if selection:
             self.save_snapshot()
@@ -1002,20 +992,18 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         if not self.gds_list: self.ax.text(self.block_w / 2, self.block_h / 2, 'No GDS Loaded', ha='center',
                                            va='center', color='#bbbbbb', fontsize=12)
 
-        shadow_offset = min(self.block_w, self.block_h) * 0.015  # 阴影偏移量，视块尺寸而定
+        shadow_offset = min(self.block_w, self.block_h) * 0.015
 
         for gds in self.gds_list:
             t_box = gds['trans'] * gds['base_bbox']
             sx, sy = t_box.left + gds['offset_x'], t_box.bottom + gds['offset_y']
             w, h = t_box.width(), t_box.height()
 
-            # --- 增加原生阴影图层，垫在主图形下方（zorder=8），默认透明度0 ---
             shadow_rect = patches.Rectangle((sx + shadow_offset, sy - shadow_offset), w, h,
                                             linewidth=0, facecolor='black', alpha=0.0, zorder=8)
             self.ax.add_patch(shadow_rect)
             gds['shadow_patch'] = shadow_rect
 
-            # 主图层
             rect = patches.Rectangle((sx, sy), w, h, linewidth=0.5, edgecolor=gds['color'], facecolor=gds['color'],
                                      alpha=0.6, zorder=10)
             self.ax.add_patch(rect)
@@ -1211,16 +1199,14 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         for line in self.guide_lines: line.remove()
         self.guide_lines.clear()
 
-        # ================= 修改处：点中文字或辅助图形时，标记为选中，并取消选择背景GDS =================
         for i in range(len(self.user_texts) - 1, -1, -1):
             if 'text_obj' in self.user_texts[i] and self.user_texts[i]['text_obj']:
                 cont, _ = self.user_texts[i]['text_obj'].contains(event)
                 if cont and event.button == 1:
-                    # 标记选中辅助文字
                     self.active_shape_type = 'text'
                     self.active_shape_idx = i
                     self.list_widget.blockSignals(True)
-                    self.list_widget.clearSelection()  # 取消所有其他选中
+                    self.list_widget.clearSelection()
                     self.list_widget.blockSignals(False)
                     self.update_canvas_selection()
 
@@ -1234,11 +1220,10 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             if 'patch' in self.user_shapes[i] and self.user_shapes[i]['patch']:
                 cont, _ = self.user_shapes[i]['patch'].contains(event)
                 if cont and event.button == 1:
-                    # 标记选中辅助形状
                     self.active_shape_type = 'shape'
                     self.active_shape_idx = i
                     self.list_widget.blockSignals(True)
-                    self.list_widget.clearSelection()  # 取消所有其他选中
+                    self.list_widget.clearSelection()
                     self.list_widget.blockSignals(False)
                     self.update_canvas_selection()
 
@@ -1251,7 +1236,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         clicked_idx = next(
             (i for i in range(len(self.gds_list) - 1, -1, -1) if self.gds_list[i]['patch'].contains(event)[0]), -1)
         if clicked_idx != -1:
-            # 如果点中了 GDS，清空形状的选择状态
             self.active_shape_type = None
             self.active_shape_idx = -1
 
@@ -1286,7 +1270,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 return
 
         elif event.button == 1 and not self.ctrl_pressed:
-            # 如果点中了背景空白处，全清状态
             self.active_shape_type = None
             self.active_shape_idx = -1
             self.list_widget.blockSignals(True)
@@ -1523,8 +1506,8 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             if best_snap_y is not None: self.guide_lines.append(
                 self.ax.axhline(y=best_snap_y, color='#FF8C00', linestyle='--', linewidth=1.5, zorder=200))
 
-        if [self.list_widget.row(item) for item in self.list_widget.selectedItems()] and \
-                [self.list_widget.row(item) for item in self.list_widget.selectedItems()][0] == self.dragging_idx:
+        if [item.row() for item in self.list_widget.selectedItems()] and \
+                [item.row() for item in self.list_widget.selectedItems()][0] == self.dragging_idx:
             x, y = self.get_anchor_coords(handle_gds, self.cb_anchor.currentText())
             self.inp_x.setText(f"{x:.3f}");
             self.inp_y.setText(f"{y:.3f}")
@@ -1803,6 +1786,125 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         except Exception as e:
             self.status_label.setText("Ready")
             QtWidgets.QMessageBox.critical(self, "Error", f"Failed to export:\n{str(e)}")
+
+    # ================= 新增：布尔运算核心功能 =================
+    def action_boolean_dialog(self):
+        if len(self.gds_list) < 1:
+            QtWidgets.QMessageBox.warning(self, "Warning", "请至少先加载 1 个 GDS 文件！")
+            return
+
+        dlg = QtWidgets.QDialog(self)
+        dlg.setWindowTitle("Boolean Operations (布尔运算)")
+        dlg.resize(350, 250)
+        layout = QtWidgets.QFormLayout(dlg)
+
+        gds_names = [f"[{i + 1}] {g['name']}" for i, g in enumerate(self.gds_list)]
+
+        cb_a = QtWidgets.QComboBox();
+        cb_a.addItems(gds_names)
+        lay_a = QtWidgets.QLineEdit("1/0")
+        cb_op = QtWidgets.QComboBox();
+        cb_op.addItems(["OR (A ∪ B) 并集", "AND (A ∩ B) 交集", "NOT (A - B) 差集", "XOR (A ⊕ B) 异或"])
+        cb_b = QtWidgets.QComboBox();
+        cb_b.addItems(gds_names)
+        lay_b = QtWidgets.QLineEdit("2/0")
+        out_lay = QtWidgets.QLineEdit("100/0")
+        out_name = QtWidgets.QLineEdit("BOOLEAN_RESULT")
+
+        layout.addRow("源 A (GDS):", cb_a)
+        layout.addRow("源 A 层号 (L/D):", lay_a)
+        layout.addRow("运算逻辑:", cb_op)
+        layout.addRow("源 B (GDS):", cb_b)
+        layout.addRow("源 B 层号 (L/D):", lay_b)
+        layout.addRow("---", QtWidgets.QLabel(""))
+        layout.addRow("输出层号 (L/D):", out_lay)
+        layout.addRow("输出模块名:", out_name)
+
+        btn = QtWidgets.QPushButton("执行布尔运算")
+        btn.setMinimumHeight(35)
+        btn.setStyleSheet("background-color: #FF8C00; color: white; font-weight: bold; border-radius: 4px;")
+        btn.clicked.connect(dlg.accept)
+        layout.addRow(btn)
+
+        if dlg.exec_():
+            try:
+                self.status_label.setText("正在执行布尔运算...")
+                QtWidgets.QApplication.processEvents()
+
+                # 解析输入
+                idx_a, idx_b = cb_a.currentIndex(), cb_b.currentIndex()
+
+                def parse_lyr(text):
+                    parts = text.split('/')
+                    return int(parts[0]), int(parts[1]) if len(parts) > 1 else 0
+
+                la, dta = parse_lyr(lay_a.text())
+                lb, dtb = parse_lyr(lay_b.text())
+                lo, dto = parse_lyr(out_lay.text())
+                op_idx = cb_op.currentIndex()
+
+                # 提取带坐标偏移的 Region
+                reg_a = self.get_gds_region(self.gds_list[idx_a], la, dta)
+                reg_b = self.get_gds_region(self.gds_list[idx_b], lb, dtb)
+
+                # 执行底层布尔运算
+                if op_idx == 0:
+                    res_reg = reg_a + reg_b  # OR
+                elif op_idx == 1:
+                    res_reg = reg_a & reg_b  # AND
+                elif op_idx == 2:
+                    res_reg = reg_a - reg_b  # NOT
+                elif op_idx == 3:
+                    res_reg = reg_a ^ reg_b  # XOR
+
+                res_reg.merge()
+
+                if res_reg.is_empty():
+                    self.status_label.setText("Ready")
+                    QtWidgets.QMessageBox.information(self, "Result", "运算结果为空（两图形可能没有交集）！")
+                    return
+
+                # 保存为临时 GDS 并加载回画布
+                temp_path = os.path.join(tempfile.gettempdir(), f"{out_name.text()}.gds")
+                out_layout = db.Layout()
+                # 统一使用源 A 的 DBU
+                src_layout_a = db.Layout();
+                src_layout_a.read(self.gds_list[idx_a]['path'])
+                out_layout.dbu = src_layout_a.dbu
+
+                out_top = out_layout.create_cell(out_name.text())
+                out_li = out_layout.layer(lo, dto)
+                out_top.shapes(out_li).insert(res_reg)
+                out_layout.write(temp_path)
+
+                self.process_single_gds(temp_path)
+                self.status_label.setText("布尔运算完成！已作为新器件加载。")
+                self.draw_preview()
+
+            except Exception as e:
+                self.status_label.setText("Ready")
+                QtWidgets.QMessageBox.critical(self, "Error", f"布尔运算失败:\n{str(e)}")
+
+    def get_gds_region(self, gds_info, layer, datatype):
+        """提取 GDS 中特定层的所有多边形，并应用画布上的平移和旋转，返回真实的 db.Region"""
+        layout = db.Layout()
+        layout.read(gds_info['path'])
+        top_cell = layout.top_cells()[0]
+        li = layout.find_layer(layer, datatype)
+
+        reg = db.Region()
+        if li is not None:
+            reg.insert(top_cell.begin_shapes_rec(li))
+        reg.merge()
+
+        # 计算在画布上的最终变换矩阵 (整型 DBU 坐标)
+        dbu = layout.dbu
+        dx_dbu = round((gds_info['trans'].disp.x + gds_info['offset_x']) / dbu)
+        dy_dbu = round((gds_info['trans'].disp.y + gds_info['offset_y']) / dbu)
+
+        i_trans = db.Trans(gds_info['trans'].rot, gds_info['trans'].is_mirror(), dx_dbu, dy_dbu)
+        reg.transform(i_trans)
+        return reg
 
 
 if __name__ == "__main__":
