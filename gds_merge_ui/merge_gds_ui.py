@@ -76,7 +76,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         for url in event.mimeData().urls():
             filepath = url.toLocalFile()
             if filepath.lower().endswith('.gds'):
-                self.process_single_gds(filepath);
+                self.process_single_gds(filepath)
                 added = True
         if added: self.draw_preview(reset_view=True)
 
@@ -90,22 +90,22 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         left_layout.setContentsMargins(5, 5, 5, 5)
 
         proj_layout = QtWidgets.QHBoxLayout()
-        btn_load = QtWidgets.QPushButton("📂 Load Project");
+        btn_load = QtWidgets.QPushButton("📂 Load Project")
         btn_load.clicked.connect(self.action_load_project)
-        btn_save = QtWidgets.QPushButton("💾 Save Project");
+        btn_save = QtWidgets.QPushButton("💾 Save Project")
         btn_save.clicked.connect(self.action_save_project)
-        proj_layout.addWidget(btn_load);
+        proj_layout.addWidget(btn_load)
         proj_layout.addWidget(btn_save)
         left_layout.addLayout(proj_layout)
 
         grp_list = QtWidgets.QGroupBox("1a. GDS Files (Drag & Drop)")
         vbox_list = QtWidgets.QVBoxLayout(grp_list)
         btn_gds_layout = QtWidgets.QHBoxLayout()
-        btn_add = QtWidgets.QPushButton("➕ Add");
+        btn_add = QtWidgets.QPushButton("➕ Add")
         btn_add.clicked.connect(self.add_gds)
-        btn_del = QtWidgets.QPushButton("➖ Del");
+        btn_del = QtWidgets.QPushButton("➖ Del")
         btn_del.clicked.connect(self.action_delete_selected)
-        btn_gds_layout.addWidget(btn_add);
+        btn_gds_layout.addWidget(btn_add)
         btn_gds_layout.addWidget(btn_del)
         vbox_list.addLayout(btn_gds_layout)
 
@@ -118,12 +118,12 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         grp_size = QtWidgets.QGroupBox("1b. Total Block Size (um)")
         size_layout = QtWidgets.QHBoxLayout(grp_size)
         size_layout.addWidget(QtWidgets.QLabel("W x H:"))
-        self.inp_block_w = QtWidgets.QLineEdit(str(self.block_w));
+        self.inp_block_w = QtWidgets.QLineEdit(str(self.block_w))
         self.inp_block_h = QtWidgets.QLineEdit(str(self.block_h))
-        btn_apply_size = QtWidgets.QPushButton("Apply");
+        btn_apply_size = QtWidgets.QPushButton("Apply")
         btn_apply_size.clicked.connect(self.update_block_size)
-        size_layout.addWidget(self.inp_block_w);
-        size_layout.addWidget(self.inp_block_h);
+        size_layout.addWidget(self.inp_block_w)
+        size_layout.addWidget(self.inp_block_h)
         size_layout.addWidget(btn_apply_size)
         left_layout.addWidget(grp_size)
 
@@ -136,13 +136,13 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         pos_layout.addRow("Anchor:", self.cb_anchor)
 
         h_pos = QtWidgets.QHBoxLayout()
-        self.inp_x = QtWidgets.QLineEdit("0.0");
+        self.inp_x = QtWidgets.QLineEdit("0.0")
         self.inp_y = QtWidgets.QLineEdit("0.0")
-        btn_apply_pos = QtWidgets.QPushButton("Apply");
+        btn_apply_pos = QtWidgets.QPushButton("Apply")
         btn_apply_pos.clicked.connect(self.apply_manual_position)
-        h_pos.addWidget(QtWidgets.QLabel("X:"));
+        h_pos.addWidget(QtWidgets.QLabel("X:"))
         h_pos.addWidget(self.inp_x)
-        h_pos.addWidget(QtWidgets.QLabel("Y:"));
+        h_pos.addWidget(QtWidgets.QLabel("Y:"))
         h_pos.addWidget(self.inp_y)
         h_pos.addWidget(btn_apply_pos)
         pos_layout.addRow("Pos:", h_pos)
@@ -152,52 +152,52 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         finish_layout = QtWidgets.QVBoxLayout(tab_finish)
         grp_dummy = QtWidgets.QGroupBox("1. Dummy Fill")
         f_dummy = QtWidgets.QFormLayout(grp_dummy)
-        self.chk_dummy = QtWidgets.QCheckBox("Enable");
-        self.chk_stagger = QtWidgets.QCheckBox("Staggered");
+        self.chk_dummy = QtWidgets.QCheckBox("Enable")
+        self.chk_stagger = QtWidgets.QCheckBox("Staggered")
         self.chk_stagger.setChecked(True)
-        h_d1 = QtWidgets.QHBoxLayout();
-        h_d1.addWidget(self.chk_dummy);
-        h_d1.addWidget(self.chk_stagger);
+        h_d1 = QtWidgets.QHBoxLayout()
+        h_d1.addWidget(self.chk_dummy)
+        h_d1.addWidget(self.chk_stagger)
         f_dummy.addRow(h_d1)
-        h_d2 = QtWidgets.QHBoxLayout();
-        self.inp_dlyr = QtWidgets.QLineEdit("1");
+        h_d2 = QtWidgets.QHBoxLayout()
+        self.inp_dlyr = QtWidgets.QLineEdit("1")
         self.inp_ddt = QtWidgets.QLineEdit("0")
-        h_d2.addWidget(QtWidgets.QLabel("Lyr:"));
-        h_d2.addWidget(self.inp_dlyr);
-        h_d2.addWidget(QtWidgets.QLabel("DT:"));
-        h_d2.addWidget(self.inp_ddt);
+        h_d2.addWidget(QtWidgets.QLabel("Lyr:"))
+        h_d2.addWidget(self.inp_dlyr)
+        h_d2.addWidget(QtWidgets.QLabel("DT:"))
+        h_d2.addWidget(self.inp_ddt)
         f_dummy.addRow(h_d2)
-        h_d3 = QtWidgets.QHBoxLayout();
-        self.inp_dsize = QtWidgets.QLineEdit("5.0");
+        h_d3 = QtWidgets.QHBoxLayout()
+        self.inp_dsize = QtWidgets.QLineEdit("5.0")
         self.inp_dspc = QtWidgets.QLineEdit("5.0")
-        h_d3.addWidget(QtWidgets.QLabel("Size:"));
-        h_d3.addWidget(self.inp_dsize);
-        h_d3.addWidget(QtWidgets.QLabel("Spc:"));
-        h_d3.addWidget(self.inp_dspc);
+        h_d3.addWidget(QtWidgets.QLabel("Size:"))
+        h_d3.addWidget(self.inp_dsize)
+        h_d3.addWidget(QtWidgets.QLabel("Spc:"))
+        h_d3.addWidget(self.inp_dspc)
         f_dummy.addRow(h_d3)
-        self.inp_dmargin = QtWidgets.QLineEdit("3.0");
+        self.inp_dmargin = QtWidgets.QLineEdit("3.0")
         f_dummy.addRow("Margin:", self.inp_dmargin)
         finish_layout.addWidget(grp_dummy)
 
         grp_seal = QtWidgets.QGroupBox("2. Seal Ring")
         f_seal = QtWidgets.QFormLayout(grp_seal)
-        self.chk_seal = QtWidgets.QCheckBox("Enable Seal Ring");
+        self.chk_seal = QtWidgets.QCheckBox("Enable Seal Ring")
         f_seal.addRow(self.chk_seal)
-        h_s1 = QtWidgets.QHBoxLayout();
-        self.inp_slyr = QtWidgets.QLineEdit("10");
+        h_s1 = QtWidgets.QHBoxLayout()
+        self.inp_slyr = QtWidgets.QLineEdit("10")
         self.inp_sdt = QtWidgets.QLineEdit("0")
-        h_s1.addWidget(QtWidgets.QLabel("Lyr:"));
-        h_s1.addWidget(self.inp_slyr);
-        h_s1.addWidget(QtWidgets.QLabel("DT:"));
-        h_s1.addWidget(self.inp_sdt);
+        h_s1.addWidget(QtWidgets.QLabel("Lyr:"))
+        h_s1.addWidget(self.inp_slyr)
+        h_s1.addWidget(QtWidgets.QLabel("DT:"))
+        h_s1.addWidget(self.inp_sdt)
         f_seal.addRow(h_s1)
-        h_s2 = QtWidgets.QHBoxLayout();
-        self.inp_sw = QtWidgets.QLineEdit("20.0");
+        h_s2 = QtWidgets.QHBoxLayout()
+        self.inp_sw = QtWidgets.QLineEdit("20.0")
         self.inp_sdist = QtWidgets.QLineEdit("0.0")
-        h_s2.addWidget(QtWidgets.QLabel("Width:"));
-        h_s2.addWidget(self.inp_sw);
-        h_s2.addWidget(QtWidgets.QLabel("Dist:"));
-        h_s2.addWidget(self.inp_sdist);
+        h_s2.addWidget(QtWidgets.QLabel("Width:"))
+        h_s2.addWidget(self.inp_sw)
+        h_s2.addWidget(QtWidgets.QLabel("Dist:"))
+        h_s2.addWidget(self.inp_sdist)
         f_seal.addRow(h_s2)
         finish_layout.addWidget(grp_seal)
         self.tabs.addTab(tab_finish, "✨ Finish")
@@ -205,15 +205,15 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         tab_export = QtWidgets.QWidget()
         export_layout = QtWidgets.QVBoxLayout(tab_export)
         export_layout.addWidget(QtWidgets.QLabel("Merged Cell Name:"))
-        self.inp_topname = QtWidgets.QLineEdit(self.top_cell_name);
+        self.inp_topname = QtWidgets.QLineEdit(self.top_cell_name)
         export_layout.addWidget(self.inp_topname)
-        btn_map = QtWidgets.QPushButton("🛠️ Layer Mapping");
-        btn_map.clicked.connect(self.open_layer_mapping_dialog);
+        btn_map = QtWidgets.QPushButton("🛠️ Layer Mapping")
+        btn_map.clicked.connect(self.open_layer_mapping_dialog)
         export_layout.addWidget(btn_map)
-        btn_exp = QtWidgets.QPushButton("💾 EXPORT GDS");
-        btn_exp.setMinimumHeight(40);
+        btn_exp = QtWidgets.QPushButton("💾 EXPORT GDS")
+        btn_exp.setMinimumHeight(40)
         btn_exp.setStyleSheet("background-color: #0078D7; color: white; font-weight: bold; border-radius: 4px;")
-        btn_exp.clicked.connect(self.execute_stitch);
+        btn_exp.clicked.connect(self.execute_stitch)
         export_layout.addWidget(btn_exp)
         export_layout.addStretch()
         self.tabs.addTab(tab_export, "💾 Export")
@@ -225,55 +225,55 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         center_layout.setContentsMargins(0, 5, 0, 5)
 
         tb1 = QtWidgets.QHBoxLayout()
-        btn_undo = QtWidgets.QPushButton("↩️ Undo");
-        btn_undo.clicked.connect(self.action_undo);
+        btn_undo = QtWidgets.QPushButton("↩️ Undo")
+        btn_undo.clicked.connect(self.action_undo)
         tb1.addWidget(btn_undo)
-        btn_fit = QtWidgets.QPushButton("🔍 Fit");
-        btn_fit.clicked.connect(lambda: self.draw_preview(reset_view=True));
+        btn_fit = QtWidgets.QPushButton("🔍 Fit")
+        btn_fit.clicked.connect(lambda: self.draw_preview(reset_view=True))
         tb1.addWidget(btn_fit)
-        self.btn_measure = QtWidgets.QPushButton("📏 Measure");
-        self.btn_measure.setCheckable(True);
-        self.btn_measure.toggled.connect(self.on_measure_toggle);
+        self.btn_measure = QtWidgets.QPushButton("📏 Measure")
+        self.btn_measure.setCheckable(True)
+        self.btn_measure.toggled.connect(self.on_measure_toggle)
         tb1.addWidget(self.btn_measure)
-        self.btn_overlap = QtWidgets.QPushButton("🔴 Overlap (ON)");
-        self.btn_overlap.setCheckable(True);
-        self.btn_overlap.setChecked(True);
-        self.btn_overlap.toggled.connect(self.on_overlap_toggle);
+        self.btn_overlap = QtWidgets.QPushButton("🔴 Overlap (ON)")
+        self.btn_overlap.setCheckable(True)
+        self.btn_overlap.setChecked(True)
+        self.btn_overlap.toggled.connect(self.on_overlap_toggle)
         tb1.addWidget(self.btn_overlap)
-        self.btn_bbox = QtWidgets.QPushButton("✅ BBox Only");
-        self.btn_bbox.setCheckable(True);
-        self.btn_bbox.setChecked(True);
-        self.btn_bbox.toggled.connect(self.on_bbox_toggle);
+        self.btn_bbox = QtWidgets.QPushButton("✅ BBox Only")
+        self.btn_bbox.setCheckable(True)
+        self.btn_bbox.setChecked(True)
+        self.btn_bbox.toggled.connect(self.on_bbox_toggle)
         tb1.addWidget(self.btn_bbox)
-        self.chk_snap = QtWidgets.QCheckBox("🌐 Snap");
-        self.inp_snap = QtWidgets.QLineEdit("10.0");
+        self.chk_snap = QtWidgets.QCheckBox("🌐 Snap")
+        self.inp_snap = QtWidgets.QLineEdit("10.0")
         self.inp_snap.setFixedWidth(50)
-        tb1.addWidget(self.chk_snap);
-        tb1.addWidget(self.inp_snap);
+        tb1.addWidget(self.chk_snap)
+        tb1.addWidget(self.inp_snap)
         tb1.addStretch()
         center_layout.addLayout(tb1)
 
         tb2 = QtWidgets.QHBoxLayout()
-        btn_text = QtWidgets.QPushButton("📝 Text");
-        btn_text.clicked.connect(self.action_add_text_dialog);
+        btn_text = QtWidgets.QPushButton("📝 Text")
+        btn_text.clicked.connect(self.action_add_text_dialog)
         tb2.addWidget(btn_text)
-        btn_box = QtWidgets.QPushButton("🔲 Box");
-        btn_box.clicked.connect(lambda: self.action_add_shape_dialog('box'));
+        btn_box = QtWidgets.QPushButton("🔲 Box")
+        btn_box.clicked.connect(lambda: self.action_add_shape_dialog('box'))
         tb2.addWidget(btn_box)
-        btn_poly = QtWidgets.QPushButton("🔶 Poly");
-        btn_poly.clicked.connect(lambda: self.action_add_shape_dialog('polygon'));
+        btn_poly = QtWidgets.QPushButton("🔶 Poly")
+        btn_poly.clicked.connect(lambda: self.action_add_shape_dialog('polygon'))
         tb2.addWidget(btn_poly)
-        btn_path = QtWidgets.QPushButton("〰️ Path");
-        btn_path.clicked.connect(lambda: self.action_add_shape_dialog('path'));
+        btn_path = QtWidgets.QPushButton("〰️ Path")
+        btn_path.clicked.connect(lambda: self.action_add_shape_dialog('path'))
         tb2.addWidget(btn_path)
-        btn_via = QtWidgets.QPushButton("⚄ ViaArray");
-        btn_via.clicked.connect(lambda: self.action_add_shape_dialog('via_array'));
+        btn_via = QtWidgets.QPushButton("⚄ ViaArray")
+        btn_via.clicked.connect(lambda: self.action_add_shape_dialog('via_array'))
         tb2.addWidget(btn_via)
-        btn_crop = QtWidgets.QPushButton("✂️ Crop");
-        btn_crop.clicked.connect(self.action_draw_crop_box);
+        btn_crop = QtWidgets.QPushButton("✂️ Crop")
+        btn_crop.clicked.connect(self.action_draw_crop_box)
         tb2.addWidget(btn_crop)
-        btn_clear = QtWidgets.QPushButton("🗑️ Clear");
-        btn_clear.clicked.connect(self.action_clear_annotations);
+        btn_clear = QtWidgets.QPushButton("🗑️ Clear")
+        btn_clear.clicked.connect(self.action_clear_annotations)
         tb2.addWidget(btn_clear)
 
         # 新增布尔运算按钮
@@ -282,20 +282,20 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         btn_bool.clicked.connect(self.action_boolean_dialog)
         tb2.addWidget(btn_bool)
 
-        self.cb_align_go = QtWidgets.QComboBox();
+        self.cb_align_go = QtWidgets.QComboBox()
         self.cb_align_go.addItems(
             ["Align Left", "Align Center X", "Align Right", "Align Top", "Align Center Y", "Align Bottom",
              "Distribute H", "Distribute V"])
-        btn_align = QtWidgets.QPushButton("▶ Align");
+        btn_align = QtWidgets.QPushButton("▶ Align")
         btn_align.clicked.connect(self.execute_align)
-        tb2.addWidget(self.cb_align_go);
-        tb2.addWidget(btn_align);
+        tb2.addWidget(self.cb_align_go)
+        tb2.addWidget(btn_align)
         tb2.addStretch()
         center_layout.addLayout(tb2)
 
-        self.figure = plt.Figure(figsize=(6, 5), dpi=100);
+        self.figure = plt.Figure(figsize=(6, 5), dpi=100)
         self.figure.patch.set_facecolor('#2b2b2b')
-        self.ax = self.figure.add_subplot(111);
+        self.ax = self.figure.add_subplot(111)
         self.ax.set_facecolor('#1e1e1e')
         self.canvas = FigureCanvas(self.figure)
         self.canvas.setFocusPolicy(QtCore.Qt.StrongFocus)
@@ -309,7 +309,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         self.canvas.mpl_connect('key_press_event', self.on_key_press)
         self.canvas.mpl_connect('key_release_event', self.on_key_release)
 
-        self.status_label = QtWidgets.QLabel("Ready: You can drag and drop GDS files here.");
+        self.status_label = QtWidgets.QLabel("Ready: You can drag and drop GDS files here.")
         center_layout.addWidget(self.status_label)
 
         # --- Right Panel ---
@@ -318,20 +318,20 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         right_layout.setContentsMargins(5, 5, 5, 5)
         grp_layers = QtWidgets.QGroupBox("Layers")
         l_layout = QtWidgets.QVBoxLayout(grp_layers)
-        btn_refresh = QtWidgets.QPushButton("🔄 Refresh");
-        btn_refresh.clicked.connect(self.refresh_layer_list);
+        btn_refresh = QtWidgets.QPushButton("🔄 Refresh")
+        btn_refresh.clicked.connect(self.refresh_layer_list)
         l_layout.addWidget(btn_refresh)
-        self.layer_list = QtWidgets.QListWidget();
+        self.layer_list = QtWidgets.QListWidget()
         l_layout.addWidget(self.layer_list)
         right_layout.addWidget(grp_layers)
 
-        self.main_splitter.addWidget(left_panel);
-        self.main_splitter.addWidget(center_panel);
+        self.main_splitter.addWidget(left_panel)
+        self.main_splitter.addWidget(center_panel)
         self.main_splitter.addWidget(right_panel)
         self.main_splitter.setSizes([350, 800, 150])
 
     def refresh_layer_list(self):
-        self.layer_list.clear();
+        self.layer_list.clear()
         global_layers = set()
         for gds in self.gds_list: global_layers.update(gds.get('layers', []))
         for l, d in sorted(list(global_layers)): self.layer_list.addItem(f"{l}/{d}")
@@ -355,15 +355,15 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.critical(self, "Error", f"Failed to load {filepath}:\n{str(e)}")
 
     def parse_gds_info(self, filepath):
-        layout = db.Layout();
+        layout = db.Layout()
         layout.read(filepath)
         top_cell = layout.top_cells()[0]
         base_bbox = top_cell.dbbox()
         layers = [(layout.get_info(li).layer, layout.get_info(li).datatype) for li in layout.layer_indexes()]
         region = db.Region()
         for li in layout.layer_indexes(): region.insert(top_cell.begin_shapes_rec(li))
-        region.merge();
-        region = region.hulls();
+        region.merge()
+        region = region.hulls()
         trans = db.DCplxTrans(layout.dbu)
         true_polygons = [[(pt.x, pt.y) for pt in db.DPolygon(poly).transformed(trans).each_point_hull()] for poly in
                          region.each() if list(db.DPolygon(poly).transformed(trans).each_point_hull())]
@@ -381,7 +381,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
 
     def on_overlap_toggle(self):
         self.btn_overlap.setText("🔴 Overlaps (ON)" if self.btn_overlap.isChecked() else "⭕ Overlaps (OFF)")
-        self.draw_overlaps();
+        self.draw_overlaps()
         self.canvas.draw_idle()
 
     def draw_overlaps(self):
@@ -392,7 +392,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 pass
         self.overlap_patches.clear()
         if not self.btn_overlap.isChecked(): return
-        n = len(self.gds_list);
+        n = len(self.gds_list)
         tol = 1e-5
         for i in range(n):
             for j in range(i + 1, n):
@@ -402,7 +402,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                     il, ir, ib, it = max(l1, l2), min(r1, r2), max(b1, b2), min(t1, t2)
                     rect = patches.Rectangle((il, ib), ir - il, it - ib, linewidth=1.5, edgecolor='red',
                                              facecolor='red', alpha=0.5, hatch='///', zorder=250)
-                    self.ax.add_patch(rect);
+                    self.ax.add_patch(rect)
                     self.overlap_patches.append(rect)
 
     def save_snapshot(self):
@@ -422,7 +422,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
     def action_undo(self):
         if not self.undo_stack: return
         snapshot = self.undo_stack.pop()
-        self.gds_list.clear();
+        self.gds_list.clear()
         self.list_widget.clear()
 
         self.active_shape_type = None
@@ -433,14 +433,14 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                         'trans': item['trans'], 'offset_x': item['offset_x'], 'offset_y': item['offset_y'],
                         'color': item['color'], 'patch': None, 'shadow_patch': None, 'collection': None,
                         'center_text': None, 'true_polygons': item['true_polygons'], 'layers': item.get('layers', [])}
-            self.gds_list.append(gds_info);
+            self.gds_list.append(gds_info)
             self.list_widget.addItem(f"[{i + 1}] {item['name']}")
-        self.refresh_layer_list();
+        self.refresh_layer_list()
         self.measurements = snapshot.get('measurements', [])
-        self.user_texts = snapshot.get('user_texts', []);
-        self.user_shapes = snapshot.get('user_shapes', []);
+        self.user_texts = snapshot.get('user_texts', [])
+        self.user_shapes = snapshot.get('user_shapes', [])
         self.crop_box = snapshot.get('crop_box')
-        self.clear_active_measurement();
+        self.clear_active_measurement()
         self.draw_preview(reset_view=False)
 
     def action_save_project(self):
@@ -473,19 +473,19 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 project_data = json.load(f)
-            self.gds_list.clear();
+            self.gds_list.clear()
             self.list_widget.clear()
-            self.measurements = project_data.get("measurements", []);
+            self.measurements = project_data.get("measurements", [])
             self.user_texts = project_data.get("user_texts", [])
-            self.user_shapes = project_data.get("user_shapes", []);
+            self.user_shapes = project_data.get("user_shapes", [])
             self.crop_box = project_data.get("crop_box")
             saved_mapping = project_data.get("layer_mapping", {})
             self.layer_mapping = {eval(k_str): tuple(v) for k_str, v in saved_mapping.items()}
-            self.clear_active_measurement();
+            self.clear_active_measurement()
             self.undo_stack.clear()
-            self.block_w = project_data.get("block_width", 5000.0);
+            self.block_w = project_data.get("block_width", 5000.0)
             self.block_h = project_data.get("block_height", 5000.0)
-            self.inp_block_w.setText(str(self.block_w));
+            self.inp_block_w.setText(str(self.block_w))
             self.inp_block_h.setText(str(self.block_h))
             self.inp_topname.setText(project_data.get("top_cell_name", "MERGED_CHIP"))
 
@@ -498,87 +498,87 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                             'offset_x': item["offset_x"], 'offset_y': item["offset_y"], 'color': item["color"],
                             'patch': None, 'shadow_patch': None, 'collection': None, 'center_text': None,
                             'true_polygons': true_polygons, 'layers': layers}
-                self.gds_list.append(gds_info);
+                self.gds_list.append(gds_info)
                 self.list_widget.addItem(f"[{i + 1}] {name}")
-            self.refresh_layer_list();
+            self.refresh_layer_list()
             self.draw_preview(reset_view=True)
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Error", str(e))
 
     def edit_text_dialog(self, idx):
         ut = self.user_texts[idx]
-        dlg = QtWidgets.QDialog(self);
+        dlg = QtWidgets.QDialog(self)
         dlg.setWindowTitle("Edit Text")
         layout = QtWidgets.QFormLayout(dlg)
-        t_var = QtWidgets.QLineEdit(ut['text']);
+        t_var = QtWidgets.QLineEdit(ut['text'])
         s_var = QtWidgets.QLineEdit(str(ut['size']))
-        l_var = QtWidgets.QLineEdit(str(ut['layer']));
+        l_var = QtWidgets.QLineEdit(str(ut['layer']))
         dt_var = QtWidgets.QLineEdit(str(ut['dt']))
-        layout.addRow("Text:", t_var);
-        layout.addRow("Size:", s_var);
-        layout.addRow("Layer:", l_var);
+        layout.addRow("Text:", t_var)
+        layout.addRow("Size:", s_var)
+        layout.addRow("Layer:", l_var)
         layout.addRow("DT:", dt_var)
-        btn = QtWidgets.QPushButton("Update");
-        btn.clicked.connect(dlg.accept);
+        btn = QtWidgets.QPushButton("Update")
+        btn.clicked.connect(dlg.accept)
         layout.addRow(btn)
         if dlg.exec_():
             try:
                 self.save_snapshot()
                 ut['text'], ut['size'], ut['layer'], ut['dt'] = t_var.text(), float(s_var.text()), int(
                     l_var.text()), int(dt_var.text())
-                tp = TextPath((ut['x'], ut['y']), ut['text'], size=ut['size']);
-                ut['text_obj'].set_path(tp);
+                tp = TextPath((ut['x'], ut['y']), ut['text'], size=ut['size'])
+                ut['text_obj'].set_path(tp)
                 self.canvas.draw_idle()
             except ValueError:
                 pass
 
     def edit_shape_dialog(self, idx):
         s = self.user_shapes[idx]
-        dlg = QtWidgets.QDialog(self);
+        dlg = QtWidgets.QDialog(self)
         dlg.setWindowTitle(f"Edit {s['type'].capitalize()}")
         layout = QtWidgets.QFormLayout(dlg)
-        l_var = QtWidgets.QLineEdit(str(s['layer']));
+        l_var = QtWidgets.QLineEdit(str(s['layer']))
         dt_var = QtWidgets.QLineEdit(str(s['dt']))
-        layout.addRow("Layer:", l_var);
+        layout.addRow("Layer:", l_var)
         layout.addRow("DT:", dt_var)
 
-        w_var = QtWidgets.QLineEdit();
-        box_w_var = QtWidgets.QLineEdit();
+        w_var = QtWidgets.QLineEdit()
+        box_w_var = QtWidgets.QLineEdit()
         box_h_var = QtWidgets.QLineEdit()
-        px_var = QtWidgets.QLineEdit();
-        py_var = QtWidgets.QLineEdit();
+        px_var = QtWidgets.QLineEdit()
+        py_var = QtWidgets.QLineEdit()
         min_x, min_y = 0, 0
 
         if s['type'] == 'path':
             w_var.setText(str(s.get('width', 20.0)));
             layout.addRow("Width:", w_var)
         elif s['type'] == 'box':
-            pts = s['points'];
+            pts = s['points']
             min_x, min_y = min(pts[0][0], pts[1][0]), min(pts[0][1], pts[1][1])
-            box_w_var.setText(str(abs(pts[1][0] - pts[0][0])));
+            box_w_var.setText(str(abs(pts[1][0] - pts[0][0])))
             box_h_var.setText(str(abs(pts[1][1] - pts[0][1])))
-            layout.addRow("Width:", box_w_var);
+            layout.addRow("Width:", box_w_var)
             layout.addRow("Height:", box_h_var)
         elif s['type'] == 'via_array':
-            w_var.setText(str(s.get('via_w', 1.0)));
+            w_var.setText(str(s.get('via_w', 1.0)))
             box_w_var.setText(str(s.get('via_h', 1.0)))
-            px_var.setText(str(s.get('pitch_x', 2.0)));
+            px_var.setText(str(s.get('pitch_x', 2.0)))
             py_var.setText(str(s.get('pitch_y', 2.0)))
-            h1 = QtWidgets.QHBoxLayout();
-            h1.addWidget(w_var);
-            h1.addWidget(box_w_var);
+            h1 = QtWidgets.QHBoxLayout()
+            h1.addWidget(w_var)
+            h1.addWidget(box_w_var)
             layout.addRow("Via WxH:", h1)
-            h2 = QtWidgets.QHBoxLayout();
-            h2.addWidget(px_var);
-            h2.addWidget(py_var);
+            h2 = QtWidgets.QHBoxLayout()
+            h2.addWidget(px_var)
+            h2.addWidget(py_var)
             layout.addRow("Pitch XxY:", h2)
 
-        btn = QtWidgets.QPushButton("Update");
-        btn.clicked.connect(dlg.accept);
+        btn = QtWidgets.QPushButton("Update")
+        btn.clicked.connect(dlg.accept)
         layout.addRow(btn)
         if dlg.exec_():
             try:
-                self.save_snapshot();
+                self.save_snapshot()
                 s['layer'], s['dt'] = int(l_var.text()), int(dt_var.text())
                 if s['type'] == 'path':
                     s['width'] = float(w_var.text())
@@ -594,61 +594,61 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
 
     def action_add_text_dialog(self):
         self.cancel_draw_mode()
-        dlg = QtWidgets.QDialog(self);
+        dlg = QtWidgets.QDialog(self)
         dlg.setWindowTitle("Add Text")
         layout = QtWidgets.QFormLayout(dlg)
-        t_var = QtWidgets.QLineEdit("CHIP_LABEL");
+        t_var = QtWidgets.QLineEdit("CHIP_LABEL")
         s_var = QtWidgets.QLineEdit("100.0")
-        l_var = QtWidgets.QLineEdit("10");
+        l_var = QtWidgets.QLineEdit("10")
         dt_var = QtWidgets.QLineEdit("0")
-        layout.addRow("Text:", t_var);
-        layout.addRow("Size:", s_var);
-        layout.addRow("Layer:", l_var);
+        layout.addRow("Text:", t_var)
+        layout.addRow("Size:", s_var)
+        layout.addRow("Layer:", l_var)
         layout.addRow("DT:", dt_var)
-        btn = QtWidgets.QPushButton("Place on Canvas");
-        btn.clicked.connect(dlg.accept);
+        btn = QtWidgets.QPushButton("Place on Canvas")
+        btn.clicked.connect(dlg.accept)
         layout.addRow(btn)
         if dlg.exec_():
             try:
                 self.draw_current_props = {'text': t_var.text(), 'size': float(s_var.text()),
                                            'layer': int(l_var.text()), 'dt': int(dt_var.text())}
-                self.draw_mode = 'text';
+                self.draw_mode = 'text'
                 self.btn_measure.setChecked(False)
-                self.status_label.setText("Text Mode: Click on Canvas to place.");
+                self.status_label.setText("Text Mode: Click on Canvas to place.")
                 self.canvas.setFocus()
             except ValueError:
                 pass
 
     def action_add_shape_dialog(self, shape_type):
         self.cancel_draw_mode()
-        dlg = QtWidgets.QDialog(self);
+        dlg = QtWidgets.QDialog(self)
         dlg.setWindowTitle(f"Add {shape_type.capitalize()}")
         layout = QtWidgets.QFormLayout(dlg)
-        l_var = QtWidgets.QLineEdit("10");
+        l_var = QtWidgets.QLineEdit("10")
         dt_var = QtWidgets.QLineEdit("0")
-        layout.addRow("Layer:", l_var);
+        layout.addRow("Layer:", l_var)
         layout.addRow("DT:", dt_var)
 
-        w_var = QtWidgets.QLineEdit("20.0");
-        vw_var = QtWidgets.QLineEdit("1.0");
+        w_var = QtWidgets.QLineEdit("20.0")
+        vw_var = QtWidgets.QLineEdit("1.0")
         vh_var = QtWidgets.QLineEdit("1.0")
-        px_var = QtWidgets.QLineEdit("2.0");
+        px_var = QtWidgets.QLineEdit("2.0")
         py_var = QtWidgets.QLineEdit("2.0")
 
         if shape_type == 'path':
             layout.addRow("Width:", w_var)
         elif shape_type == 'via_array':
-            h1 = QtWidgets.QHBoxLayout();
-            h1.addWidget(vw_var);
-            h1.addWidget(vh_var);
+            h1 = QtWidgets.QHBoxLayout()
+            h1.addWidget(vw_var)
+            h1.addWidget(vh_var)
             layout.addRow("Via WxH:", h1)
-            h2 = QtWidgets.QHBoxLayout();
-            h2.addWidget(px_var);
-            h2.addWidget(py_var);
+            h2 = QtWidgets.QHBoxLayout()
+            h2.addWidget(px_var)
+            h2.addWidget(py_var)
             layout.addRow("Pitch XxY:", h2)
 
-        btn = QtWidgets.QPushButton("Start Drawing");
-        btn.clicked.connect(dlg.accept);
+        btn = QtWidgets.QPushButton("Start Drawing")
+        btn.clicked.connect(dlg.accept)
         layout.addRow(btn)
         if dlg.exec_():
             try:
@@ -660,24 +660,24 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                         {'via_w': float(vw_var.text()), 'via_h': float(vh_var.text()), 'pitch_x': float(px_var.text()),
                          'pitch_y': float(py_var.text())})
 
-                self.draw_mode = shape_type;
-                self.draw_points = [];
+                self.draw_mode = shape_type
+                self.draw_points = []
                 self.btn_measure.setChecked(False)
-                self.status_label.setText(f"{shape_type.capitalize()} Mode active. (Hold Ctrl for Ortho)");
+                self.status_label.setText(f"{shape_type.capitalize()} Mode active. (Hold Ctrl for Ortho)")
                 self.canvas.setFocus()
             except ValueError:
                 pass
 
     def action_draw_crop_box(self):
         self.cancel_draw_mode()
-        self.draw_mode = 'crop';
-        self.draw_points = [];
+        self.draw_mode = 'crop'
+        self.draw_points = []
         self.btn_measure.setChecked(False)
-        self.status_label.setText("Crop Mode: Click top-left, click bottom-right.");
+        self.status_label.setText("Crop Mode: Click top-left, click bottom-right.")
         self.canvas.setFocus()
 
     def cancel_draw_mode(self):
-        self.draw_mode = None;
+        self.draw_mode = None
         self.draw_points = []
         if self.temp_draw_preview:
             try:
@@ -685,7 +685,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             except:
                 pass
             self.temp_draw_preview = None
-        self.canvas.draw_idle();
+        self.canvas.draw_idle()
         self.status_label.setText("Ready")
 
     def update_canvas_selection(self):
@@ -739,8 +739,8 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         self.canvas.draw_idle()
 
     def open_layer_mapping_dialog(self):
-        dlg = QtWidgets.QDialog(self);
-        dlg.setWindowTitle("Layer Mapping");
+        dlg = QtWidgets.QDialog(self)
+        dlg.setWindowTitle("Layer Mapping")
         dlg.resize(400, 300)
         layout = QtWidgets.QVBoxLayout(dlg)
         all_src = set()
@@ -751,9 +751,9 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         table = QtWidgets.QTableWidget(len(self.layer_mapping), 4)
         table.setHorizontalHeaderLabels(["Src Layer", "Src DT", "New Layer", "New DT"])
         for i, ((sl, sdt), (tl, tdt)) in enumerate(sorted(self.layer_mapping.items())):
-            table.setItem(i, 0, QtWidgets.QTableWidgetItem(str(sl)));
+            table.setItem(i, 0, QtWidgets.QTableWidgetItem(str(sl)))
             table.setItem(i, 1, QtWidgets.QTableWidgetItem(str(sdt)))
-            table.setItem(i, 2, QtWidgets.QTableWidgetItem(str(tl)));
+            table.setItem(i, 2, QtWidgets.QTableWidgetItem(str(tl)))
             table.setItem(i, 3, QtWidgets.QTableWidgetItem(str(tdt)))
         layout.addWidget(table)
 
@@ -767,8 +767,8 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                     pass
             dlg.accept()
 
-        btn = QtWidgets.QPushButton("Save Mapping");
-        btn.clicked.connect(save_mapping);
+        btn = QtWidgets.QPushButton("Save Mapping")
+        btn.clicked.connect(save_mapping)
         layout.addWidget(btn)
         dlg.exec_()
 
@@ -816,7 +816,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             target = (min(b[2] for b in bboxes) + max(b[3] for b in bboxes)) / 2
             for i in selection: self.set_anchor_coords(self.gds_list[i], 'Center', (
                     self.get_bbox(self.gds_list[i])[0] + self.get_bbox(self.gds_list[i])[1]) / 2, target)
-        self.draw_preview(reset_view=False);
+        self.draw_preview(reset_view=False)
         self.on_listbox_select()
 
     def distribute_selected(self, axis):
@@ -839,7 +839,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             cur_y = items[0]['b']
             for item in items: self.set_anchor_coords(item['gds'], 'Bottom-Left', item['l'], cur_y); cur_y += item[
                                                                                                                   'h'] + gap
-        self.draw_preview(reset_view=False);
+        self.draw_preview(reset_view=False)
         self.on_listbox_select()
 
     def on_measure_toggle(self):
@@ -853,16 +853,16 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             self.canvas.setFocus()
         else:
             self.status_label.setText("Measure Mode OFF.")
-            self.clear_active_measurement();
+            self.clear_active_measurement()
             self.canvas.draw_idle()
 
     def action_clear_annotations(self):
         self.save_snapshot()
-        self.measurements.clear();
-        self.user_texts.clear();
-        self.user_shapes.clear();
+        self.measurements.clear()
+        self.user_texts.clear()
+        self.user_shapes.clear()
         self.crop_box = None
-        self.clear_active_measurement();
+        self.clear_active_measurement()
         self.active_shape_type = None
         self.active_shape_idx = -1
         self.draw_preview(reset_view=False)
@@ -881,7 +881,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             except:
                 pass
         self.guide_lines.clear()
-        self.measure_state = 0;
+        self.measure_state = 0
         self.measure_start_pt = None
 
     def get_anchor_coords(self, gds, anchor_type, temp_ox=None, temp_oy=None):
@@ -917,7 +917,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         selection = [self.list_widget.row(item) for item in self.list_widget.selectedItems()]
         if selection:
             x, y = self.get_anchor_coords(self.gds_list[selection[0]], self.cb_anchor.currentText())
-            self.inp_x.setText(f"{x:.3f}");
+            self.inp_x.setText(f"{x:.3f}")
             self.inp_y.setText(f"{y:.3f}")
             if self.btn_measure.isChecked(): self.btn_measure.setChecked(False)
         self.update_canvas_selection()
@@ -965,19 +965,19 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             self.save_snapshot()
             self.list_widget.blockSignals(True)
             for idx in selection:
-                del self.gds_list[idx];
+                del self.gds_list[idx]
                 self.list_widget.takeItem(idx)
             self.list_widget.clearSelection()
             self.list_widget.blockSignals(False)
 
             self.refresh_layer_list()
-            self.inp_x.setText("0.0");
+            self.inp_x.setText("0.0")
             self.inp_y.setText("0.0")
             self.draw_preview(reset_view=False)
 
     def draw_preview(self, reset_view=False):
         cur_xlim, cur_ylim = self.ax.get_xlim(), self.ax.get_ylim()
-        self.ax.clear();
+        self.ax.clear()
         self.clear_active_measurement()
 
         for spine in self.ax.spines.values(): spine.set_visible(False)
@@ -1007,7 +1007,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             rect = patches.Rectangle((sx, sy), w, h, linewidth=0.5, edgecolor=gds['color'], facecolor=gds['color'],
                                      alpha=0.6, zorder=10)
             self.ax.add_patch(rect)
-            gds['patch'] = rect;
+            gds['patch'] = rect
             gds['collection'] = None
 
             if not self.btn_bbox.isChecked() and gds['true_polygons']:
@@ -1042,8 +1042,8 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
 
         for s in self.user_shapes:
             if s['type'] in ['box', 'via_array']:
-                pts = s['points'];
-                x0, y0 = pts[0];
+                pts = s['points']
+                x0, y0 = pts[0]
                 x1, y1 = pts[1]
                 fc = '#FF8C00' if s['type'] == 'box' else 'none'
                 ec = '#FF8C00' if s['type'] == 'box' else '#00CED1'
@@ -1051,12 +1051,12 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 rect = patches.Rectangle((min(x0, x1), min(y0, y1)), abs(x1 - x0), abs(y1 - y0),
                                          fill=(s['type'] == 'box'), facecolor=fc, hatch=hatch, alpha=0.5, edgecolor=ec,
                                          zorder=240, linewidth=2)
-                self.ax.add_patch(rect);
+                self.ax.add_patch(rect)
                 s['patch'] = rect
             elif s['type'] == 'polygon':
                 poly = patches.Polygon(s['points'], closed=True, fill=True, facecolor='#32CD32', alpha=0.5,
                                        edgecolor='#32CD32', zorder=240)
-                self.ax.add_patch(poly);
+                self.ax.add_patch(poly)
                 s['patch'] = poly
             elif s['type'] == 'path':
                 path_points = [db.DPoint(x, y) for x, y in s['points']]
@@ -1065,12 +1065,12 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                     hull_pts = [(pt.x, pt.y) for pt in dpath.polygon().each_point_hull()]
                     poly = patches.Polygon(hull_pts, closed=True, fill=True, facecolor='#9370DB', alpha=0.5,
                                            edgecolor='#9370DB', zorder=240)
-                    self.ax.add_patch(poly);
+                    self.ax.add_patch(poly)
                     s['patch'] = poly
 
         if self.crop_box:
-            pts = self.crop_box;
-            x0, y0 = pts[0];
+            pts = self.crop_box
+            x0, y0 = pts[0]
             x1, y1 = pts[1]
             rect = patches.Rectangle((min(x0, x1), min(y0, y1)), abs(x1 - x0), abs(y1 - y0), fill=False,
                                      edgecolor='red', linestyle='--', linewidth=3, zorder=400)
@@ -1082,12 +1082,12 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             self.ax.set_xlim(-self.block_w * 0.1, self.block_w * 1.1)
             self.ax.set_ylim(-self.block_h * 0.1, self.block_h * 1.1)
         else:
-            self.ax.set_xlim(cur_xlim);
+            self.ax.set_xlim(cur_xlim)
             self.ax.set_ylim(cur_ylim)
 
         self.ax.set_aspect('equal', adjustable='datalim')
         self.ax.grid(True, linestyle='-', color='#444444', alpha=0.4)
-        self.draw_overlaps();
+        self.draw_overlaps()
         self.canvas.draw()
 
     def on_scroll(self, event):
@@ -1193,7 +1193,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 self.measure_state = 0
                 if self.snap_indicator: self.snap_indicator.set_data([], [])
                 self.measure_line = self.measure_text = None
-            self.canvas.draw_idle();
+            self.canvas.draw_idle()
             return
 
         for line in self.guide_lines: line.remove()
@@ -1210,7 +1210,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                     self.list_widget.blockSignals(False)
                     self.update_canvas_selection()
 
-                    self.dragging_type = 'text';
+                    self.dragging_type = 'text'
                     self.dragging_idx = i
                     self.drag_start_x, self.drag_start_y = event.xdata, event.ydata
                     self.rect_start_x, self.rect_start_y = self.user_texts[i]['x'], self.user_texts[i]['y']
@@ -1227,7 +1227,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                     self.list_widget.blockSignals(False)
                     self.update_canvas_selection()
 
-                    self.dragging_type = 'shape';
+                    self.dragging_type = 'shape'
                     self.dragging_idx = i
                     self.drag_start_x, self.drag_start_y = event.xdata, event.ydata
                     self.drag_start_offsets = list(self.user_shapes[i]['points'])
@@ -1243,7 +1243,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 self.show_context_menu(clicked_idx);
                 return
             elif event.button == 1:
-                self.dragging_type = 'gds';
+                self.dragging_type = 'gds'
                 self.dragging_idx = clicked_idx
                 self.drag_start_x, self.drag_start_y = event.xdata, event.ydata
                 self.rect_start_x, self.rect_start_y = self.gds_list[clicked_idx]['patch'].get_x(), \
@@ -1350,7 +1350,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                             self.ax.add_patch(self.temp_draw_preview)
                         else:
                             self.temp_draw_preview.set_xy(hull_pts)
-            self.canvas.draw_idle();
+            self.canvas.draw_idle()
             return
 
         if self.btn_measure.isChecked():
@@ -1372,13 +1372,13 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 self.measure_text.set_position((snap_x, snap_y))
                 self.measure_text.set_text(
                     f" L: {math.hypot(snap_x - x0, snap_y - y0):.2f}\n dx: {abs(snap_x - x0):.2f}\n dy: {abs(snap_y - y0):.2f}")
-            self.canvas.draw_idle();
+            self.canvas.draw_idle()
             return
 
         if self.dragging_type is None: return
         if not self.drag_snapshot_taken: self.save_snapshot(); self.drag_snapshot_taken = True
 
-        dx_raw = event.xdata - self.drag_start_x;
+        dx_raw = event.xdata - self.drag_start_x
         dy_raw = event.ydata - self.drag_start_y
 
         if self.dragging_type == 'text':
@@ -1393,7 +1393,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             tp = TextPath((nx, ny), self.user_texts[self.dragging_idx]['text'],
                           size=self.user_texts[self.dragging_idx]['size'])
             self.user_texts[self.dragging_idx]['text_obj'].set_path(tp)
-            self.canvas.draw_idle();
+            self.canvas.draw_idle()
             return
 
         if self.dragging_type == 'shape':
@@ -1411,7 +1411,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             new_pts = [(ox + dx, oy + dy) for ox, oy in self.drag_start_offsets]
             s['points'] = new_pts
             if s['type'] in ['box', 'via_array']:
-                x0, y0 = new_pts[0];
+                x0, y0 = new_pts[0]
                 x1, y1 = new_pts[1]
                 s['patch'].set_bounds(min(x0, x1), min(y0, y1), abs(x1 - x0), abs(y1 - y0))
             elif s['type'] == 'polygon':
@@ -1421,7 +1421,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 if len(path_points) >= 2:
                     hull_pts = [(pt.x, pt.y) for pt in db.DPath(path_points, s['width']).polygon().each_point_hull()]
                     s['patch'].set_xy(hull_pts)
-            self.canvas.draw_idle();
+            self.canvas.draw_idle()
             return
 
         for line in self.guide_lines: line.remove()
@@ -1468,7 +1468,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 for dy in drag_y_pois:
                     for oy in other_y_pois:
                         if abs(dy - oy) < min_dy: min_dy, best_snap_y, snap_shift_y = abs(dy - oy), oy, oy - dy
-            temp_ox += snap_shift_x;
+            temp_ox += snap_shift_x
             temp_oy += snap_shift_y
 
         delta_x, delta_y = temp_ox - self.drag_start_offsets[self.dragging_idx][0], temp_oy - \
@@ -1481,7 +1481,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             nx_final, ny_final = (gds['trans'] * gds['base_bbox']).left + new_ox, (
                     gds['trans'] * gds['base_bbox']).bottom + new_oy
 
-            gds['patch'].set_x(nx_final);
+            gds['patch'].set_x(nx_final)
             gds['patch'].set_y(ny_final)
 
             if 'shadow_patch' in gds and gds['shadow_patch']:
@@ -1506,25 +1506,25 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             if best_snap_y is not None: self.guide_lines.append(
                 self.ax.axhline(y=best_snap_y, color='#FF8C00', linestyle='--', linewidth=1.5, zorder=200))
 
-        if [item.row() for item in self.list_widget.selectedItems()] and \
-                [item.row() for item in self.list_widget.selectedItems()][0] == self.dragging_idx:
+        if [self.list_widget.row(item) for item in self.list_widget.selectedItems()] and \
+                [self.list_widget.row(item) for item in self.list_widget.selectedItems()][0] == self.dragging_idx:
             x, y = self.get_anchor_coords(handle_gds, self.cb_anchor.currentText())
-            self.inp_x.setText(f"{x:.3f}");
+            self.inp_x.setText(f"{x:.3f}")
             self.inp_y.setText(f"{y:.3f}")
 
-        self.draw_overlaps();
+        self.draw_overlaps()
         self.canvas.draw_idle()
 
     def on_release(self, event):
         if self.btn_measure.isChecked() and event.button == 1: return
         if self.dragging_type is not None:
-            self.dragging_type = None;
-            self.dragging_idx = -1;
-            self.drag_snapshot_taken = False;
+            self.dragging_type = None
+            self.dragging_idx = -1
+            self.drag_snapshot_taken = False
             self.drag_start_offsets.clear()
             for line in self.guide_lines: line.remove()
-            self.guide_lines.clear();
-            self.update_canvas_selection();
+            self.guide_lines.clear()
+            self.update_canvas_selection()
             self.canvas.draw_idle()
 
     def get_pois(self, gds, temp_ox=None, temp_oy=None):
@@ -1538,9 +1538,9 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         a_dup = menu.addAction(f"Duplicate {self.gds_list[idx]['name']}")
         a_arr = menu.addAction("Create Array (Step & Repeat)...")
         menu.addSeparator()
-        a_ccw = menu.addAction("Rotate 90 CCW");
+        a_ccw = menu.addAction("Rotate 90 CCW")
         a_cw = menu.addAction("Rotate 90 CW")
-        a_fh = menu.addAction("Flip H");
+        a_fh = menu.addAction("Flip H")
         a_fv = menu.addAction("Flip V")
 
         action = menu.exec_(QtGui.QCursor.pos())
@@ -1558,7 +1558,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             self.action_flip_vertical(idx)
 
     def action_duplicate(self, idx):
-        self.save_snapshot();
+        self.save_snapshot()
         o = self.gds_list[idx]
         self.gds_list.append(
             {'path': o['path'], 'name': o['name'], 'base_bbox': o['base_bbox'], 'trans': o['trans'] * db.DTrans(),
@@ -1569,19 +1569,19 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         self.draw_preview()
 
     def action_create_array(self, idx):
-        dlg = QtWidgets.QDialog(self);
+        dlg = QtWidgets.QDialog(self)
         dlg.setWindowTitle("Create Array")
         layout = QtWidgets.QFormLayout(dlg)
-        rows_var = QtWidgets.QLineEdit("2");
+        rows_var = QtWidgets.QLineEdit("2")
         cols_var = QtWidgets.QLineEdit("2")
-        spc_x_var = QtWidgets.QLineEdit("1000");
+        spc_x_var = QtWidgets.QLineEdit("1000")
         spc_y_var = QtWidgets.QLineEdit("1000")
-        layout.addRow("Rows (Y):", rows_var);
+        layout.addRow("Rows (Y):", rows_var)
         layout.addRow("Cols (X):", cols_var)
-        layout.addRow("Space X (um):", spc_x_var);
+        layout.addRow("Space X (um):", spc_x_var)
         layout.addRow("Space Y (um):", spc_y_var)
-        btn = QtWidgets.QPushButton("Generate Array");
-        btn.clicked.connect(dlg.accept);
+        btn = QtWidgets.QPushButton("Generate Array")
+        btn.clicked.connect(dlg.accept)
         layout.addRow(btn)
 
         if dlg.exec_():
@@ -1589,7 +1589,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 r, c, sx, sy = int(rows_var.text()), int(cols_var.text()), float(spc_x_var.text()), float(
                     spc_y_var.text())
                 if r < 1 or c < 1: return
-                self.save_snapshot();
+                self.save_snapshot()
                 o = self.gds_list[idx]
                 for i in range(r):
                     for j in range(c):
@@ -1652,12 +1652,12 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                         QtWidgets.QMessageBox.warning(self, "Missing", f"Missing GDS:\n{file_path}")
                         cache[file_path] = None
                         continue
-                    src_layout = db.Layout();
+                    src_layout = db.Layout()
                     src_layout.read(file_path)
                     if idx == 0: target_layout.dbu = src_layout.dbu
                     src_top = src_layout.top_cells()[0]
                     for cell in src_layout.each_cell(): cell.name = f"chip{idx}_" + cell.name
-                    new_cell = target_layout.create_cell(src_top.name);
+                    new_cell = target_layout.create_cell(src_top.name)
                     new_cell.copy_tree(src_top)
                     cache[file_path] = new_cell.cell_index()
 
@@ -1743,7 +1743,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 size_um, space_um, margin_um = float(self.inp_dsize.text()), float(self.inp_dspc.text()), float(
                     self.inp_dmargin.text())
                 keep_out = db.Region(merged_top.begin_shapes_rec(layer_idx))
-                keep_out.size(int(margin_um / dbu));
+                keep_out.size(int(margin_um / dbu))
                 keep_out.merge()
 
                 dummy_region = db.Region()
@@ -1787,35 +1787,41 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             self.status_label.setText("Ready")
             QtWidgets.QMessageBox.critical(self, "Error", f"Failed to export:\n{str(e)}")
 
-    # ================= 新增：布尔运算核心功能 =================
     def action_boolean_dialog(self):
-        if len(self.gds_list) < 1:
-            QtWidgets.QMessageBox.warning(self, "Warning", "请至少先加载 1 个 GDS 文件！")
+        if len(self.gds_list) == 0 and len(self.user_shapes) == 0:
+            QtWidgets.QMessageBox.warning(self, "Warning", "画布上没有任何内容！请先加载 GDS 或手动绘制图形。")
             return
 
         dlg = QtWidgets.QDialog(self)
         dlg.setWindowTitle("Boolean Operations (布尔运算)")
-        dlg.resize(350, 250)
+        dlg.resize(400, 260)
         layout = QtWidgets.QFormLayout(dlg)
 
-        gds_names = [f"[{i + 1}] {g['name']}" for i, g in enumerate(self.gds_list)]
+        gds_names = [f"📦 [GDS {i + 1}] {g['name']}" for i, g in enumerate(self.gds_list)]
+        shape_names = [f"✏️ [Shape {i + 1}] {s['type'].capitalize()} (L:{s['layer']} D:{s['dt']})" for i, s in
+                       enumerate(self.user_shapes)]
+        all_sources = gds_names + shape_names
 
         cb_a = QtWidgets.QComboBox();
-        cb_a.addItems(gds_names)
-        lay_a = QtWidgets.QLineEdit("1/0")
+        cb_a.addItems(all_sources)
+        lay_a = QtWidgets.QLineEdit("10/0")
         cb_op = QtWidgets.QComboBox();
         cb_op.addItems(["OR (A ∪ B) 并集", "AND (A ∩ B) 交集", "NOT (A - B) 差集", "XOR (A ⊕ B) 异或"])
         cb_b = QtWidgets.QComboBox();
-        cb_b.addItems(gds_names)
-        lay_b = QtWidgets.QLineEdit("2/0")
+        cb_b.addItems(all_sources)
+        lay_b = QtWidgets.QLineEdit("10/0")
         out_lay = QtWidgets.QLineEdit("100/0")
         out_name = QtWidgets.QLineEdit("BOOLEAN_RESULT")
 
-        layout.addRow("源 A (GDS):", cb_a)
-        layout.addRow("源 A 层号 (L/D):", lay_a)
+        if len(all_sources) > 1:
+            cb_a.setCurrentIndex(0)
+            cb_b.setCurrentIndex(1)
+
+        layout.addRow("源 A (选择器件或形状):", cb_a)
+        layout.addRow("源 A 层号 (选 GDS 时生效):", lay_a)
         layout.addRow("运算逻辑:", cb_op)
-        layout.addRow("源 B (GDS):", cb_b)
-        layout.addRow("源 B 层号 (L/D):", lay_b)
+        layout.addRow("源 B (选择器件或形状):", cb_b)
+        layout.addRow("源 B 层号 (选 GDS 时生效):", lay_b)
         layout.addRow("---", QtWidgets.QLabel(""))
         layout.addRow("输出层号 (L/D):", out_lay)
         layout.addRow("输出模块名:", out_name)
@@ -1831,7 +1837,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 self.status_label.setText("正在执行布尔运算...")
                 QtWidgets.QApplication.processEvents()
 
-                # 解析输入
                 idx_a, idx_b = cb_a.currentIndex(), cb_b.currentIndex()
 
                 def parse_lyr(text):
@@ -1843,11 +1848,15 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 lo, dto = parse_lyr(out_lay.text())
                 op_idx = cb_op.currentIndex()
 
-                # 提取带坐标偏移的 Region
-                reg_a = self.get_gds_region(self.gds_list[idx_a], la, dta)
-                reg_b = self.get_gds_region(self.gds_list[idx_b], lb, dtb)
+                target_dbu = 0.001
+                if self.gds_list:
+                    test_layout = db.Layout()
+                    test_layout.read(self.gds_list[0]['path'])
+                    target_dbu = test_layout.dbu
 
-                # 执行底层布尔运算
+                reg_a = self.extract_region_for_boolean(idx_a, la, dta, target_dbu)
+                reg_b = self.extract_region_for_boolean(idx_b, lb, dtb, target_dbu)
+
                 if op_idx == 0:
                     res_reg = reg_a + reg_b  # OR
                 elif op_idx == 1:
@@ -1861,16 +1870,13 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
 
                 if res_reg.is_empty():
                     self.status_label.setText("Ready")
-                    QtWidgets.QMessageBox.information(self, "Result", "运算结果为空（两图形可能没有交集）！")
+                    QtWidgets.QMessageBox.information(self, "Result",
+                                                      "运算结果为空（两图形没有交集，或者提取不到对应层的数据）！")
                     return
 
-                # 保存为临时 GDS 并加载回画布
                 temp_path = os.path.join(tempfile.gettempdir(), f"{out_name.text()}.gds")
                 out_layout = db.Layout()
-                # 统一使用源 A 的 DBU
-                src_layout_a = db.Layout();
-                src_layout_a.read(self.gds_list[idx_a]['path'])
-                out_layout.dbu = src_layout_a.dbu
+                out_layout.dbu = target_dbu
 
                 out_top = out_layout.create_cell(out_name.text())
                 out_li = out_layout.layer(lo, dto)
@@ -1885,26 +1891,63 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 self.status_label.setText("Ready")
                 QtWidgets.QMessageBox.critical(self, "Error", f"布尔运算失败:\n{str(e)}")
 
-    def get_gds_region(self, gds_info, layer, datatype):
-        """提取 GDS 中特定层的所有多边形，并应用画布上的平移和旋转，返回真实的 db.Region"""
-        layout = db.Layout()
-        layout.read(gds_info['path'])
-        top_cell = layout.top_cells()[0]
-        li = layout.find_layer(layer, datatype)
-
+    def extract_region_for_boolean(self, global_idx, layer, datatype, dbu):
         reg = db.Region()
-        if li is not None:
-            reg.insert(top_cell.begin_shapes_rec(li))
-        reg.merge()
+        num_gds = len(self.gds_list)
 
-        # 计算在画布上的最终变换矩阵 (整型 DBU 坐标)
-        dbu = layout.dbu
-        dx_dbu = round((gds_info['trans'].disp.x + gds_info['offset_x']) / dbu)
-        dy_dbu = round((gds_info['trans'].disp.y + gds_info['offset_y']) / dbu)
+        if global_idx < num_gds:
+            gds_info = self.gds_list[global_idx]
+            layout = db.Layout()
+            layout.read(gds_info['path'])
+            top_cell = layout.top_cells()[0]
+            li = layout.find_layer(layer, datatype)
 
-        i_trans = db.Trans(gds_info['trans'].rot, gds_info['trans'].is_mirror(), dx_dbu, dy_dbu)
-        reg.transform(i_trans)
-        return reg
+            if li is not None:
+                reg.insert(top_cell.begin_shapes_rec(li))
+            reg.merge()
+
+            dx_dbu = round((gds_info['trans'].disp.x + gds_info['offset_x']) / dbu)
+            dy_dbu = round((gds_info['trans'].disp.y + gds_info['offset_y']) / dbu)
+            i_trans = db.Trans(gds_info['trans'].rot, gds_info['trans'].is_mirror(), dx_dbu, dy_dbu)
+            reg.transform(i_trans)
+            return reg
+
+        else:
+            shape_idx = global_idx - num_gds
+            s = self.user_shapes[shape_idx]
+            pts = s['points']
+
+            if s['type'] == 'box':
+                min_x, min_y = min(pts[0][0], pts[1][0]), min(pts[0][1], pts[1][1])
+                max_x, max_y = max(pts[0][0], pts[1][0]), max(pts[0][1], pts[1][1])
+                reg.insert(db.Box(int(min_x / dbu), int(min_y / dbu), int(max_x / dbu), int(max_y / dbu)))
+
+            elif s['type'] == 'polygon':
+                pts_dbu = [db.Point(int(x / dbu), int(y / dbu)) for x, y in pts]
+                reg.insert(db.Polygon(pts_dbu))
+
+            elif s['type'] == 'path':
+                pts_dbu = [db.Point(int(x / dbu), int(y / dbu)) for x, y in pts]
+                w_dbu = int(s['width'] / dbu)
+                reg.insert(db.Path(pts_dbu, w_dbu).polygon())
+
+            elif s['type'] == 'via_array':
+                vw_dbu, vh_dbu = int(s['via_w'] / dbu), int(s['via_h'] / dbu)
+                px_dbu, py_dbu = int(s['pitch_x'] / dbu), int(s['pitch_y'] / dbu)
+                if px_dbu > 0 and py_dbu > 0 and vw_dbu > 0 and vh_dbu > 0:
+                    min_x, min_y = min(pts[0][0], pts[1][0]), min(pts[0][1], pts[1][1])
+                    max_x, max_y = max(pts[0][0], pts[1][0]), max(pts[0][1], pts[1][1])
+                    min_x_dbu, min_y_dbu = int(min_x / dbu), int(min_y / dbu)
+                    max_x_dbu, max_y_dbu = int(max_x / dbu), int(max_y / dbu)
+                    curr_x = min_x_dbu
+                    while curr_x + vw_dbu <= max_x_dbu:
+                        curr_y = min_y_dbu
+                        while curr_y + vh_dbu <= max_y_dbu:
+                            reg.insert(db.Box(curr_x, curr_y, curr_x + vw_dbu, curr_y + vh_dbu))
+                            curr_y += py_dbu
+                        curr_x += px_dbu
+            reg.merge()
+            return reg
 
 
 if __name__ == "__main__":
