@@ -49,17 +49,20 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         self.setup_ui()
         self.draw_preview(reset_view=True)
 
-    def keyPressEvent(self, event):
-        if event.key() == QtCore.Qt.Key_Control:
+    def on_key_press(self, event):
+        if event.key in ['control', 'ctrl']:
             self.ctrl_pressed = True
-            if self.last_mouse_event and self.last_mouse_event.inaxes: self.on_motion(self.last_mouse_event)
-        super().keyPressEvent(event)
+            if self.last_mouse_event and getattr(self.last_mouse_event, 'inaxes', False):
+                self.on_motion(self.last_mouse_event)
+        # --- 新增：画布选中后使用 Delete 键删除器件 ---
+        elif event.key in ['delete', 'backspace']:
+            self.action_delete_selected()
 
-    def keyReleaseEvent(self, event):
-        if event.key() == QtCore.Qt.Key_Control:
+    def on_key_release(self, event):
+        if event.key in ['control', 'ctrl']:
             self.ctrl_pressed = False
-            if self.last_mouse_event and self.last_mouse_event.inaxes: self.on_motion(self.last_mouse_event)
-        super().keyReleaseEvent(event)
+            if self.last_mouse_event and getattr(self.last_mouse_event, 'inaxes', False):
+                self.on_motion(self.last_mouse_event)
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
@@ -289,10 +292,14 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         self.canvas = FigureCanvas(self.figure);
         self.canvas.setFocusPolicy(QtCore.Qt.StrongFocus)
         center_layout.addWidget(self.canvas)
-        self.canvas.mpl_connect('button_press_event', self.on_press);
+
+        self.canvas.mpl_connect('button_press_event', self.on_press)
         self.canvas.mpl_connect('motion_notify_event', self.on_motion)
-        self.canvas.mpl_connect('button_release_event', self.on_release);
+        self.canvas.mpl_connect('button_release_event', self.on_release)
         self.canvas.mpl_connect('scroll_event', self.on_scroll)
+        self.canvas.mpl_connect('key_press_event', self.on_key_press)
+        self.canvas.mpl_connect('key_release_event', self.on_key_release)
+
         self.status_label = QtWidgets.QLabel("Ready: You can drag and drop GDS files here.");
         center_layout.addWidget(self.status_label)
 
@@ -331,8 +338,8 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             gds_info = {'path': filepath, 'name': base_name, 'base_bbox': base_bbox, 'trans': db.DTrans(),
                         'offset_x': cx_block - cx_gds, 'offset_y': cy_block - cy_gds,
                         'color': self.color_palette[len(self.gds_list) % len(self.color_palette)],
-                        'patch': None, 'collection': None, 'center_text': None, 'true_polygons': true_polygons,
-                        'layers': layers}
+                        'patch': None, 'shadow_patch': None, 'collection': None, 'center_text': None,
+                        'true_polygons': true_polygons, 'layers': layers}
             self.gds_list.append(gds_info)
             self.list_widget.addItem(f"[{len(self.gds_list)}] {base_name}")
             self.refresh_layer_list()
@@ -412,8 +419,8 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         for i, item in enumerate(snapshot['gds_list']):
             gds_info = {'path': item['path'], 'name': item['name'], 'base_bbox': item['base_bbox'],
                         'trans': item['trans'], 'offset_x': item['offset_x'], 'offset_y': item['offset_y'],
-                        'color': item['color'], 'patch': None, 'collection': None, 'center_text': None,
-                        'true_polygons': item['true_polygons'], 'layers': item.get('layers', [])}
+                        'color': item['color'], 'patch': None, 'shadow_patch': None, 'collection': None,
+                        'center_text': None, 'true_polygons': item['true_polygons'], 'layers': item.get('layers', [])}
             self.gds_list.append(gds_info);
             self.list_widget.addItem(f"[{i + 1}] {item['name']}")
         self.refresh_layer_list();
@@ -477,8 +484,8 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 trans = db.DTrans(item["trans_rot"], item["trans_mirror"], item["trans_dx"], item["trans_dy"])
                 gds_info = {'path': path, 'name': name, 'base_bbox': base_bbox, 'trans': trans,
                             'offset_x': item["offset_x"], 'offset_y': item["offset_y"], 'color': item["color"],
-                            'patch': None, 'collection': None, 'center_text': None, 'true_polygons': true_polygons,
-                            'layers': layers}
+                            'patch': None, 'shadow_patch': None, 'collection': None, 'center_text': None,
+                            'true_polygons': true_polygons, 'layers': layers}
                 self.gds_list.append(gds_info);
                 self.list_widget.addItem(f"[{i + 1}] {name}")
             self.refresh_layer_list();
@@ -531,7 +538,8 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         min_x, min_y = 0, 0
 
         if s['type'] == 'path':
-            w_var.setText(str(s.get('width', 20.0))); layout.addRow("Width:", w_var)
+            w_var.setText(str(s.get('width', 20.0)));
+            layout.addRow("Width:", w_var)
         elif s['type'] == 'box':
             pts = s['points'];
             min_x, min_y = min(pts[0][0], pts[1][0]), min(pts[0][1], pts[1][1])
@@ -668,25 +676,38 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         self.canvas.draw_idle();
         self.status_label.setText("Ready")
 
-    # ================= 核心缺失：选区更新与对齐相关 =================
+    # ================= 修改 1：使用双层色块实现安全阴影，避免渲染引擎崩溃 =================
     def update_canvas_selection(self):
         selected_indices = [item.row() for item in self.list_widget.selectedItems()]
         for i, gds in enumerate(self.gds_list):
-            if gds['patch']:
+            if gds.get('patch'):
                 if i in selected_indices:
-                    gds['patch'].set_alpha(0.6);
-                    gds['patch'].set_linewidth(2.0);
-                    gds['patch'].set_edgecolor('white')
+                    # 显示阴影图层，设置器件高亮和斜纹
+                    if 'shadow_patch' in gds and gds['shadow_patch']:
+                        gds['shadow_patch'].set_alpha(0.6)  # 激活阴影块
+
+                    gds['patch'].set_alpha(0.8)
+                    gds['patch'].set_linewidth(3.0)
+                    gds['patch'].set_edgecolor('#00FFFF')  # 青色高亮边框
+                    gds['patch'].set_hatch('///')  # 斜纹标记
+
                     if gds.get('collection'):
-                        gds['collection'].set_edgecolor('white');
+                        gds['collection'].set_edgecolor('#00FFFF')
                         gds['collection'].set_linewidth(1.5)
                 else:
-                    gds['patch'].set_alpha(0.2);
-                    gds['patch'].set_linewidth(0.5);
+                    # 隐藏阴影图层，器件恢复原状
+                    if 'shadow_patch' in gds and gds['shadow_patch']:
+                        gds['shadow_patch'].set_alpha(0.0)  # 隐藏阴影块
+
+                    gds['patch'].set_alpha(0.3)
+                    gds['patch'].set_linewidth(1.0)
                     gds['patch'].set_edgecolor(gds['color'])
+                    gds['patch'].set_hatch(None)
+
                     if gds.get('collection'):
-                        gds['collection'].set_edgecolor(mcolors.to_rgba(gds['color'], alpha=0.9));
+                        gds['collection'].set_edgecolor(mcolors.to_rgba(gds['color'], alpha=0.9))
                         gds['collection'].set_linewidth(0.5)
+
         self.canvas.draw_idle()
 
     def open_layer_mapping_dialog(self):
@@ -754,7 +775,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         elif mode == 'center_x':
             target = (min(b[0] for b in bboxes) + max(b[1] for b in bboxes)) / 2
             for i in selection: self.set_anchor_coords(self.gds_list[i], 'Center', target, (
-                        self.get_bbox(self.gds_list[i])[2] + self.get_bbox(self.gds_list[i])[3]) / 2)
+                    self.get_bbox(self.gds_list[i])[2] + self.get_bbox(self.gds_list[i])[3]) / 2)
         elif mode == 'bottom':
             target = min(b[2] for b in bboxes)
             for i in selection: self.set_anchor_coords(self.gds_list[i], 'Bottom-Left',
@@ -766,7 +787,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         elif mode == 'center_y':
             target = (min(b[2] for b in bboxes) + max(b[3] for b in bboxes)) / 2
             for i in selection: self.set_anchor_coords(self.gds_list[i], 'Center', (
-                        self.get_bbox(self.gds_list[i])[0] + self.get_bbox(self.gds_list[i])[1]) / 2, target)
+                    self.get_bbox(self.gds_list[i])[0] + self.get_bbox(self.gds_list[i])[1]) / 2, target)
         self.draw_preview(reset_view=False);
         self.on_listbox_select()
 
@@ -797,7 +818,10 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         if self.btn_measure.isChecked():
             self.cancel_draw_mode()
             self.status_label.setText("Measure Mode ON: Click once to start, click again to finish.")
+            # 使用阻塞信号来防止状态死循环
+            self.list_widget.blockSignals(True)
             self.list_widget.clearSelection()
+            self.list_widget.blockSignals(False)
             self.update_canvas_selection()
             self.canvas.setFocus()
         else:
@@ -858,7 +882,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             gds['offset_x'], gds['offset_y'] = target_x - t_box.right, target_y - t_box.top
         elif anchor_type == "Center":
             gds['offset_x'], gds['offset_y'] = target_x - (t_box.left + t_box.right) / 2, target_y - (
-                        t_box.bottom + t_box.top) / 2
+                    t_box.bottom + t_box.top) / 2
 
     def on_listbox_select(self):
         selection = [item.row() for item in self.list_widget.selectedItems()]
@@ -890,19 +914,25 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         except:
             pass
 
+    # ================= 修改 2：在执行删除时屏蔽 UI 信号更新，避免由于下标错位导致的闪退 =================
     def action_delete_selected(self):
         selection = sorted([item.row() for item in self.list_widget.selectedItems()], reverse=True)
         if selection:
             self.save_snapshot()
+
+            # --- 阻止信号避免 Qt 产生递归错误 ---
+            self.list_widget.blockSignals(True)
             for idx in selection:
-                del self.gds_list[idx]
+                del self.gds_list[idx];
                 self.list_widget.takeItem(idx)
+            self.list_widget.clearSelection()  # 必须清理残余的选择状态
+            self.list_widget.blockSignals(False)
+
             self.refresh_layer_list()
             self.inp_x.setText("0.0");
             self.inp_y.setText("0.0")
             self.draw_preview(reset_view=False)
 
-    # ================= 极速渲染画布 =================
     def draw_preview(self, reset_view=False):
         cur_xlim, cur_ylim = self.ax.get_xlim(), self.ax.get_ylim()
         self.ax.clear();
@@ -920,11 +950,20 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         if not self.gds_list: self.ax.text(self.block_w / 2, self.block_h / 2, 'No GDS Loaded', ha='center',
                                            va='center', color='#bbbbbb', fontsize=12)
 
+        shadow_offset = min(self.block_w, self.block_h) * 0.015  # 阴影偏移量，视块尺寸而定
+
         for gds in self.gds_list:
             t_box = gds['trans'] * gds['base_bbox']
             sx, sy = t_box.left + gds['offset_x'], t_box.bottom + gds['offset_y']
             w, h = t_box.width(), t_box.height()
 
+            # --- 增加原生阴影图层，垫在主图形下方（zorder=8），默认透明度0 ---
+            shadow_rect = patches.Rectangle((sx + shadow_offset, sy - shadow_offset), w, h,
+                                            linewidth=0, facecolor='black', alpha=0.0, zorder=8)
+            self.ax.add_patch(shadow_rect)
+            gds['shadow_patch'] = shadow_rect
+
+            # 主图层
             rect = patches.Rectangle((sx, sy), w, h, linewidth=0.5, edgecolor=gds['color'], facecolor=gds['color'],
                                      alpha=0.6, zorder=10)
             self.ax.add_patch(rect)
@@ -1021,13 +1060,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             [event.ydata - (event.ydata - cur_y[0]) * scale, event.ydata + (cur_y[1] - event.ydata) * scale])
         self.canvas.draw_idle()
 
-    def get_pois(self, gds, temp_ox=None, temp_oy=None):
-        t_box = gds['trans'] * gds['base_bbox']
-        ox, oy = (gds['offset_x'] if temp_ox is None else temp_ox), (gds['offset_y'] if temp_oy is None else temp_oy)
-        return [t_box.left + ox, t_box.right + ox, (t_box.left + t_box.right) / 2 + ox], [t_box.bottom + oy,
-                                                                                          t_box.top + oy, (
-                                                                                                      t_box.bottom + t_box.top) / 2 + oy]
-
     def get_snapped_coordinate(self, x, y):
         cur_xlim, cur_ylim = self.ax.get_xlim(), self.ax.get_ylim()
         best_x, best_y = x, y
@@ -1088,7 +1120,8 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                     if not self.draw_points:
                         self.draw_points.append((snap_x, snap_y))
                     else:
-                        self.draw_points.append((snap_x, snap_y)); self.finalize_shape()
+                        self.draw_points.append((snap_x, snap_y));
+                        self.finalize_shape()
                 return
 
             elif self.draw_mode in ['polygon', 'path']:
@@ -1150,31 +1183,41 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             (i for i in range(len(self.gds_list) - 1, -1, -1) if self.gds_list[i]['patch'].contains(event)[0]), -1)
         if clicked_idx != -1:
             if event.button in [2, 3]:
-                self.show_context_menu(clicked_idx); return
+                self.show_context_menu(clicked_idx);
+                return
             elif event.button == 1:
                 self.dragging_type = 'gds';
                 self.dragging_idx = clicked_idx
                 self.drag_start_x, self.drag_start_y = event.xdata, event.ydata
                 self.rect_start_x, self.rect_start_y = self.gds_list[clicked_idx]['patch'].get_x(), \
-                self.gds_list[clicked_idx]['patch'].get_y()
+                    self.gds_list[clicked_idx]['patch'].get_y()
+
                 current_selection = [item.row() for item in self.list_widget.selectedItems()]
 
-                if self.ctrl_pressed:
-                    if clicked_idx in current_selection:
-                        self.list_widget.item(clicked_idx).setSelected(False)
-                    else:
+                # ================= 修改 3：在这里使用阻塞信号，从根源掐断引起崩溃的 Qt 信号环路 =================
+                self.list_widget.blockSignals(True)
+                try:
+                    if self.ctrl_pressed:
+                        if clicked_idx in current_selection:
+                            self.list_widget.item(clicked_idx).setSelected(False)
+                        else:
+                            self.list_widget.item(clicked_idx).setSelected(True)
+                    elif clicked_idx not in current_selection:
+                        self.list_widget.clearSelection()
                         self.list_widget.item(clicked_idx).setSelected(True)
-                elif clicked_idx not in current_selection:
-                    self.list_widget.clearSelection()
-                    self.list_widget.item(clicked_idx).setSelected(True)
+                finally:
+                    self.list_widget.blockSignals(False)
 
                 self.drag_start_offsets = {idx: (self.gds_list[idx]['offset_x'], self.gds_list[idx]['offset_y']) for idx
                                            in [item.row() for item in self.list_widget.selectedItems()]}
-                self.on_listbox_select();
+                # 只有这里统一安全地调用一次更新
+                self.on_listbox_select()
                 return
 
         elif event.button == 1 and not self.ctrl_pressed:
+            self.list_widget.blockSignals(True)
             self.list_widget.clearSelection()
+            self.list_widget.blockSignals(False)
             self.update_canvas_selection()
 
     def finalize_shape(self):
@@ -1349,7 +1392,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                         temp_ox, temp_oy = snap_x - t_box.right, snap_y - t_box.top
                     elif anchor == "Center":
                         temp_ox, temp_oy = snap_x - (t_box.left + t_box.right) / 2, snap_y - (
-                                    t_box.bottom + t_box.top) / 2
+                                t_box.bottom + t_box.top) / 2
                     is_grid_snapped = True
             except ValueError:
                 pass
@@ -1357,7 +1400,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         if not is_grid_snapped:
             drag_x_pois, drag_y_pois = self.get_pois(handle_gds, temp_ox, temp_oy)
             min_dx, min_dy = (self.ax.get_xlim()[1] - self.ax.get_xlim()[0]) * 0.02, (
-                        self.ax.get_ylim()[1] - self.ax.get_ylim()[0]) * 0.02
+                    self.ax.get_ylim()[1] - self.ax.get_ylim()[0]) * 0.02
             snap_shift_x, snap_shift_y = 0, 0
             for i, other_gds in enumerate(self.gds_list):
                 if i in self.drag_start_offsets: continue
@@ -1379,10 +1422,17 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             new_ox, new_oy = self.drag_start_offsets[idx][0] + delta_x, self.drag_start_offsets[idx][1] + delta_y
             gds['offset_x'], gds['offset_y'] = new_ox, new_oy
             nx_final, ny_final = (gds['trans'] * gds['base_bbox']).left + new_ox, (
-                        gds['trans'] * gds['base_bbox']).bottom + new_oy
+                    gds['trans'] * gds['base_bbox']).bottom + new_oy
 
             gds['patch'].set_x(nx_final);
             gds['patch'].set_y(ny_final)
+
+            # --- 拖拽时同步更新底层阴影方块的位置 ---
+            if 'shadow_patch' in gds and gds['shadow_patch']:
+                shadow_offset = min(self.block_w, self.block_h) * 0.015
+                gds['shadow_patch'].set_x(nx_final + shadow_offset)
+                gds['shadow_patch'].set_y(ny_final - shadow_offset)
+
             if gds['center_text']: gds['center_text'].set_position(
                 (nx_final + (gds['trans'] * gds['base_bbox']).width() / 2,
                  ny_final + (gds['trans'] * gds['base_bbox']).height() / 2))
@@ -1421,6 +1471,12 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             self.update_canvas_selection();
             self.canvas.draw_idle()
 
+    def get_pois(self, gds, temp_ox=None, temp_oy=None):
+        t_box = gds['trans'] * gds['base_bbox']
+        ox, oy = (gds['offset_x'] if temp_ox is None else temp_ox), (gds['offset_y'] if temp_oy is None else temp_oy)
+        return [t_box.left + ox, t_box.right + ox, (t_box.left + t_box.right) / 2 + ox], \
+            [t_box.bottom + oy, t_box.top + oy, (t_box.bottom + t_box.top) / 2 + oy]
+
     def show_context_menu(self, idx):
         menu = QtWidgets.QMenu(self)
         a_dup = menu.addAction(f"Duplicate {self.gds_list[idx]['name']}")
@@ -1451,7 +1507,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         self.gds_list.append(
             {'path': o['path'], 'name': o['name'], 'base_bbox': o['base_bbox'], 'trans': o['trans'] * db.DTrans(),
              'offset_x': o['offset_x'] + 200, 'offset_y': o['offset_y'] - 200, 'color': o['color'], 'patch': None,
-             'collection': None, 'center_text': None, 'true_polygons': o['true_polygons'],
+             'shadow_patch': None, 'collection': None, 'center_text': None, 'true_polygons': o['true_polygons'],
              'layers': o.get('layers', [])})
         self.list_widget.addItem(f"[{len(self.gds_list)}] {o['name']}")
         self.draw_preview()
@@ -1485,7 +1541,8 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                         self.gds_list.append(
                             {'path': o['path'], 'name': f"{o['name']}_R{i}C{j}", 'base_bbox': o['base_bbox'],
                              'trans': o['trans'] * db.DTrans(), 'offset_x': o['offset_x'] + j * sx,
-                             'offset_y': o['offset_y'] + i * sy, 'color': o['color'], 'patch': None, 'collection': None,
+                             'offset_y': o['offset_y'] + i * sy, 'color': o['color'], 'patch': None,
+                             'shadow_patch': None, 'collection': None,
                              'center_text': None, 'true_polygons': o['true_polygons'], 'layers': o.get('layers', [])})
                         self.list_widget.addItem(f"[{len(self.gds_list)}] {self.gds_list[-1]['name']}")
                 self.draw_preview()
@@ -1493,20 +1550,32 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 pass
 
     def action_rotate_ccw(self, i):
-        self.save_snapshot(); self.gds_list[i]['trans'] = db.DTrans(1, False, 0, 0) * self.gds_list[i][
-            'trans']; self.draw_preview(); self.on_listbox_select()
+        self.save_snapshot();
+        self.gds_list[i]['trans'] = db.DTrans(1, False, 0, 0) * self.gds_list[i][
+            'trans'];
+        self.draw_preview();
+        self.on_listbox_select()
 
     def action_rotate_cw(self, i):
-        self.save_snapshot(); self.gds_list[i]['trans'] = db.DTrans(3, False, 0, 0) * self.gds_list[i][
-            'trans']; self.draw_preview(); self.on_listbox_select()
+        self.save_snapshot();
+        self.gds_list[i]['trans'] = db.DTrans(3, False, 0, 0) * self.gds_list[i][
+            'trans'];
+        self.draw_preview();
+        self.on_listbox_select()
 
     def action_flip_horizontal(self, i):
-        self.save_snapshot(); self.gds_list[i]['trans'] = db.DTrans(2, True, 0, 0) * self.gds_list[i][
-            'trans']; self.draw_preview(); self.on_listbox_select()
+        self.save_snapshot();
+        self.gds_list[i]['trans'] = db.DTrans(2, True, 0, 0) * self.gds_list[i][
+            'trans'];
+        self.draw_preview();
+        self.on_listbox_select()
 
     def action_flip_vertical(self, i):
-        self.save_snapshot(); self.gds_list[i]['trans'] = db.DTrans(0, True, 0, 0) * self.gds_list[i][
-            'trans']; self.draw_preview(); self.on_listbox_select()
+        self.save_snapshot();
+        self.gds_list[i]['trans'] = db.DTrans(0, True, 0, 0) * self.gds_list[i][
+            'trans'];
+        self.draw_preview();
+        self.on_listbox_select()
 
     def execute_stitch(self):
         if not self.gds_list: return
@@ -1672,7 +1741,6 @@ if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)
     app.setStyle("Fusion")
 
-    # 极客暗黑主题
     palette = QtGui.QPalette()
     palette.setColor(QtGui.QPalette.Window, QtGui.QColor(43, 43, 43))
     palette.setColor(QtGui.QPalette.WindowText, QtCore.Qt.white)
