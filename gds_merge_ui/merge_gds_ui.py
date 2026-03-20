@@ -4,6 +4,15 @@ import json
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
+# --- 新增：尝试导入拖拽库 ---
+try:
+    from tkinterdnd2 import DND_FILES, TkinterDnD
+
+    DND_SUPPORTED = True
+except ImportError:
+    DND_SUPPORTED = False
+# ------------------------
+
 import matplotlib
 
 matplotlib.use('TkAgg')
@@ -22,7 +31,12 @@ plt.rcParams['axes.unicode_minus'] = False
 
 class GDSMultiStitcherApp:
     def __init__(self):
-        self.root = tk.Tk()
+        # --- 新增：如果支持拖拽，则使用 TkinterDnD 的窗口实体 ---
+        if DND_SUPPORTED:
+            self.root = TkinterDnD.Tk()
+        else:
+            self.root = tk.Tk()
+
         self.root.title("GDS MERGER 1.0 - Pro Performance")
 
         window_width = 1180
@@ -76,19 +90,30 @@ class GDSMultiStitcherApp:
         }
         self.align_var = tk.StringVar(value="⇤ Align Left")
 
-        # --- 新增：性能优化与功能变量 ---
+        # --- 性能优化与功能变量 ---
         self.show_overlap_var = tk.BooleanVar(value=True)
         self.overlap_patches = []
 
         self.grid_snap_var = tk.BooleanVar(value=False)
         self.grid_size_var = tk.StringVar(value="10.0")
 
-        # 默认开启 BBox 模式（仅显示边框），大幅提升大文件渲染性能
         self.bbox_only_var = tk.BooleanVar(value=True)
+
+        # --- 新增：Dummy Fill 变量 ---
+        self.enable_dummy_var = tk.BooleanVar(value=False)
+        self.dummy_layer_var = tk.StringVar(value="1")
+        self.dummy_datatype_var = tk.StringVar(value="0")
+        self.dummy_size_var = tk.StringVar(value="5.0")
+        self.dummy_spacing_var = tk.StringVar(value="5.0")
+        self.dummy_margin_var = tk.StringVar(value="3.0")
         # ----------------------------
 
         self.top_cell_name_var = tk.StringVar(value="MERGED_CHIP")
-        self.status_var = tk.StringVar(value="Ready: Please add GDS files.")
+        if DND_SUPPORTED:
+            self.status_var = tk.StringVar(value="Ready: Drag and Drop GDS files or Add manually.")
+        else:
+            self.status_var = tk.StringVar(value="Ready: Please add GDS files.")
+
         self.color_palette = ['#1f77b4', '#d62728', '#2ca02c', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22',
                               '#17becf']
 
@@ -134,6 +159,12 @@ class GDSMultiStitcherApp:
         scrollbar.config(command=self.listbox.yview)
         self.listbox.bind('<<ListboxSelect>>', self.on_listbox_select)
 
+        # --- 新增：为 Listbox 绑定拖拽事件 ---
+        if DND_SUPPORTED:
+            self.listbox.drop_target_register(DND_FILES)
+            self.listbox.dnd_bind('<<Drop>>', self.on_file_drop)
+        # -----------------------------------
+
         # 1b. Block 尺寸设置
         block_settings_frame = ttk.LabelFrame(left_frame, text="1b. Block Size Settings", padding=10)
         block_settings_frame.pack(fill=tk.X, pady=(0, 10))
@@ -170,11 +201,31 @@ class GDSMultiStitcherApp:
                                                                                               pady=(10, 0),
                                                                                               sticky=tk.EW)
 
-        # 2. 导出设置
+        # 2. 导出设置 (新增了紧凑型的 Dummy Fill 面板)
         output_frame = ttk.LabelFrame(left_frame, text="2. Export Settings", padding=10)
         output_frame.pack(fill=tk.X, pady=(0, 10))
         ttk.Label(output_frame, text="Merged Top Cell Name:").pack(anchor=tk.W)
         ttk.Entry(output_frame, textvariable=self.top_cell_name_var).pack(fill=tk.X, pady=5)
+
+        # --- 新增 Dummy Fill 紧凑 UI ---
+        dummy_f = ttk.Frame(output_frame)
+        dummy_f.pack(fill=tk.X, pady=(0, 5))
+        ttk.Checkbutton(dummy_f, text="Enable Dummy Fill", variable=self.enable_dummy_var).grid(row=0, column=0,
+                                                                                                columnspan=4,
+                                                                                                sticky=tk.W)
+        ttk.Label(dummy_f, text="Layer:").grid(row=1, column=0, sticky=tk.W)
+        ttk.Entry(dummy_f, textvariable=self.dummy_layer_var, width=4).grid(row=1, column=1, padx=2)
+        ttk.Label(dummy_f, text="DT:").grid(row=1, column=2, sticky=tk.E)
+        ttk.Entry(dummy_f, textvariable=self.dummy_datatype_var, width=4).grid(row=1, column=3, padx=2)
+        ttk.Label(dummy_f, text="Size(um):").grid(row=2, column=0, sticky=tk.W)
+        ttk.Entry(dummy_f, textvariable=self.dummy_size_var, width=4).grid(row=2, column=1, padx=2)
+        ttk.Label(dummy_f, text="Spc:").grid(row=2, column=2, sticky=tk.E)
+        ttk.Entry(dummy_f, textvariable=self.dummy_spacing_var, width=4).grid(row=2, column=3, padx=2)
+        ttk.Label(dummy_f, text="Margin(um):").grid(row=3, column=0, columnspan=2, sticky=tk.W)
+        ttk.Entry(dummy_f, textvariable=self.dummy_margin_var, width=8).grid(row=3, column=2, columnspan=2, sticky=tk.W,
+                                                                             padx=2)
+        # ------------------------------
+
         ttk.Button(output_frame, text="💾 Export Merged GDS", command=self.execute_stitch).pack(fill=tk.X, pady=5,
                                                                                                ipady=5)
 
@@ -242,6 +293,36 @@ class GDSMultiStitcherApp:
         # 底部状态栏
         status_bar = ttk.Label(self.root, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W)
         status_bar.pack(side=tk.BOTTOM, fill=tk.X)
+
+    # --- 新增：处理拖拽逻辑 ---
+    def on_file_drop(self, event):
+        # 拆分拖入的多个文件路径
+        files = self.root.tk.splitlist(event.data)
+        added = False
+        for p in files:
+            if p.lower().endswith('.gds'):
+                self.process_single_gds(p)
+                added = True
+        if added:
+            self.draw_preview(reset_view=True)
+
+    def process_single_gds(self, filepath):
+        try:
+            self.save_snapshot()
+            base_name = os.path.splitext(os.path.basename(filepath))[0]
+            base_bbox, true_polygons = self.parse_gds_info(filepath)
+            gds_info = {
+                'path': filepath, 'name': base_name, 'base_bbox': base_bbox, 'trans': db.DTrans(),
+                'offset_x': 0.0, 'offset_y': 0.0,
+                'color': self.color_palette[len(self.gds_list) % len(self.color_palette)],
+                'patch': None, 'center_text': None, 'true_polygons': true_polygons, 'poly_patches': []
+            }
+            self.gds_list.append(gds_info)
+            self.listbox.insert(tk.END, f"[{len(self.gds_list)}] {base_name}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load {filepath}:\n{str(e)}")
+
+    # --------------------------
 
     # --- 动态按钮文本切换与重绘触发 ---
     def on_bbox_toggle(self):
@@ -439,7 +520,7 @@ class GDSMultiStitcherApp:
         elif mode == 'center_x':
             target = (min(b[0] for b in bboxes) + max(b[1] for b in bboxes)) / 2
             for i in selection: self.set_anchor_coords(self.gds_list[i], 'Center', target, (
-                        self.get_bbox(self.gds_list[i])[2] + self.get_bbox(self.gds_list[i])[3]) / 2)
+                    self.get_bbox(self.gds_list[i])[2] + self.get_bbox(self.gds_list[i])[3]) / 2)
         elif mode == 'bottom':
             target = min(b[2] for b in bboxes)
             for i in selection: self.set_anchor_coords(self.gds_list[i], 'Bottom-Left',
@@ -451,7 +532,7 @@ class GDSMultiStitcherApp:
         elif mode == 'center_y':
             target = (min(b[2] for b in bboxes) + max(b[3] for b in bboxes)) / 2
             for i in selection: self.set_anchor_coords(self.gds_list[i], 'Center', (
-                        self.get_bbox(self.gds_list[i])[0] + self.get_bbox(self.gds_list[i])[1]) / 2, target)
+                    self.get_bbox(self.gds_list[i])[0] + self.get_bbox(self.gds_list[i])[1]) / 2, target)
 
         self.draw_preview(reset_view=False)
         self.on_listbox_select()
@@ -555,7 +636,7 @@ class GDSMultiStitcherApp:
             gds['offset_x'], gds['offset_y'] = target_x - t_box.right, target_y - t_box.top
         elif anchor_type == "Center":
             gds['offset_x'], gds['offset_y'] = target_x - (t_box.left + t_box.right) / 2, target_y - (
-                        t_box.bottom + t_box.top) / 2
+                    t_box.bottom + t_box.top) / 2
 
     def on_listbox_select(self, event=None):
         selection = self.listbox.curselection()
@@ -615,22 +696,12 @@ class GDSMultiStitcherApp:
 
     def add_gds(self):
         paths = filedialog.askopenfilenames(filetypes=[("GDS Files", "*.gds")])
+        added = False
         for p in paths:
-            try:
-                self.save_snapshot()
-                base_name = os.path.splitext(os.path.basename(p))[0]
-                base_bbox, true_polygons = self.parse_gds_info(p)
-                gds_info = {
-                    'path': p, 'name': base_name, 'base_bbox': base_bbox, 'trans': db.DTrans(),
-                    'offset_x': 0.0, 'offset_y': 0.0,
-                    'color': self.color_palette[len(self.gds_list) % len(self.color_palette)],
-                    'patch': None, 'center_text': None, 'true_polygons': true_polygons, 'poly_patches': []
-                }
-                self.gds_list.append(gds_info)
-                self.listbox.insert(tk.END, f"[{len(self.gds_list)}] {base_name}")
-            except Exception as e:
-                messagebox.showerror("Error", str(e))
-        if paths: self.draw_preview(reset_view=True)
+            self.process_single_gds(p)
+            added = True
+        if added:
+            self.draw_preview(reset_view=True)
 
     def action_delete_selected(self):
         selection = self.listbox.curselection()
@@ -903,7 +974,7 @@ class GDSMultiStitcherApp:
                         temp_ox, temp_oy = snap_x - t_box.right, snap_y - t_box.top
                     elif anchor == "Center":
                         temp_ox, temp_oy = snap_x - (t_box.left + t_box.right) / 2, snap_y - (
-                                    t_box.bottom + t_box.top) / 2
+                                t_box.bottom + t_box.top) / 2
 
                     is_grid_snapped = True
             except ValueError:
@@ -1093,6 +1164,7 @@ class GDSMultiStitcherApp:
         self.draw_preview();
         self.on_listbox_select()
 
+    # --- 修改：在原有的导出函数中加入 Dummy Fill 逻辑 ---
     def execute_stitch(self):
         if not self.gds_list: return
         out_p = filedialog.asksaveasfilename(defaultextension=".gds")
@@ -1102,16 +1174,15 @@ class GDSMultiStitcherApp:
             merged_top = target_layout.create_cell(self.top_cell_name_var.get() or "MERGED")
             cache = {}
 
+            # 1. 原有的实例拼版逻辑
             for idx, g in enumerate(self.gds_list):
                 file_path = g['path']
 
                 if file_path not in cache:
-                    # --- 新增：源文件防丢失校验 ---
                     if not os.path.exists(file_path):
                         messagebox.showwarning("File Missing", f"源文件已被移动或删除，将被跳过导出：\n{file_path}")
-                        cache[file_path] = None  # 标记为缺失
+                        cache[file_path] = None
                         continue
-                    # -----------------------------
 
                     src_layout = db.Layout()
                     src_layout.read(file_path)
@@ -1125,14 +1196,54 @@ class GDSMultiStitcherApp:
                     new_cell.copy_tree(src_top)
                     cache[file_path] = new_cell.cell_index()
 
-                # 如果文件有效，则执行 Instance 实例化
                 if cache[file_path] is not None:
                     merged_top.insert(
                         db.DCellInstArray(cache[file_path], db.DTrans(g['offset_x'], g['offset_y']) * g['trans']))
 
+            # 2. 新增：执行 Dummy Fill 计算逻辑
+            if self.enable_dummy_var.get():
+                self.status_var.set("Calculating Dummy Fill... This may take a moment.")
+                self.root.update()
+
+                dbu = target_layout.dbu
+                layer_num = int(self.dummy_layer_var.get())
+                datatype_num = int(self.dummy_datatype_var.get())
+                size_um = float(self.dummy_size_var.get())
+                space_um = float(self.dummy_spacing_var.get())
+                margin_um = float(self.dummy_margin_var.get())
+
+                layer_info = db.LayerInfo(layer_num, datatype_num)
+                layer_idx = target_layout.layer(layer_info)
+
+                keep_out_region = db.Region(merged_top.begin_shapes_rec(layer_idx))
+                margin_dbu = int(margin_um / dbu)
+                keep_out_region.size(margin_dbu)
+                keep_out_region.merge()
+
+                dummy_region = db.Region()
+                box_size_dbu = int(size_um / dbu)
+                box_pitch_dbu = int((size_um + space_um) / dbu)
+
+                fill_area = db.Box(0, 0, int(self.block_width / dbu), int(self.block_height / dbu))
+
+                x = fill_area.left
+                while x + box_size_dbu <= fill_area.right:
+                    y = fill_area.bottom
+                    while y + box_size_dbu <= fill_area.top:
+                        dummy_region.insert(db.Box(x, y, x + box_size_dbu, y + box_size_dbu))
+                        y += box_pitch_dbu
+                    x += box_pitch_dbu
+
+                final_dummy_region = dummy_region - keep_out_region
+                merged_top.shapes(layer_idx).insert(final_dummy_region)
+
+            self.status_var.set("Writing to disk...")
+            self.root.update()
             target_layout.write(out_p)
+            self.status_var.set("Ready")
             messagebox.showinfo("OK", "Merged Success!\n导出合并成功！")
         except Exception as e:
+            self.status_var.set("Ready")
             messagebox.showerror("Error", f"Failed to export merged GDS:\n{str(e)}")
 
 
