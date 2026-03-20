@@ -31,6 +31,9 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         self.layer_mapping = {}
 
         self.dragging_type, self.dragging_idx = None, -1
+        # --- 新增：用于记录当前选中的辅助形状或文字 ---
+        self.active_shape_type, self.active_shape_idx = None, -1
+
         self.drag_start_x = self.drag_start_y = self.rect_start_x = self.rect_start_y = 0
         self.drag_start_offsets = {}
         self.drag_snapshot_taken = False
@@ -54,7 +57,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             self.ctrl_pressed = True
             if self.last_mouse_event and getattr(self.last_mouse_event, 'inaxes', False):
                 self.on_motion(self.last_mouse_event)
-        # --- 新增：画布选中后使用 Delete 键删除器件 ---
         elif event.key in ['delete', 'backspace']:
             self.action_delete_selected()
 
@@ -327,7 +329,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         for gds in self.gds_list: global_layers.update(gds.get('layers', []))
         for l, d in sorted(list(global_layers)): self.layer_list.addItem(f"{l}/{d}")
 
-    # ================= 核心业务 =================
     def process_single_gds(self, filepath):
         try:
             self.save_snapshot()
@@ -416,6 +417,11 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         snapshot = self.undo_stack.pop()
         self.gds_list.clear();
         self.list_widget.clear()
+
+        # 撤销时一并清空形状的选择状态
+        self.active_shape_type = None
+        self.active_shape_idx = -1
+
         for i, item in enumerate(snapshot['gds_list']):
             gds_info = {'path': item['path'], 'name': item['name'], 'base_bbox': item['base_bbox'],
                         'trans': item['trans'], 'offset_x': item['offset_x'], 'offset_y': item['offset_y'],
@@ -676,37 +682,57 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         self.canvas.draw_idle();
         self.status_label.setText("Ready")
 
-    # ================= 修改 1：使用双层色块实现安全阴影，避免渲染引擎崩溃 =================
+    # ================= 修改处：将 user_shapes 纳入统一视觉高亮体系 =================
     def update_canvas_selection(self):
+        # 1. 更新 GDS 器件的高亮状态
         selected_indices = [item.row() for item in self.list_widget.selectedItems()]
         for i, gds in enumerate(self.gds_list):
             if gds.get('patch'):
                 if i in selected_indices:
-                    # 显示阴影图层，设置器件高亮和斜纹
                     if 'shadow_patch' in gds and gds['shadow_patch']:
-                        gds['shadow_patch'].set_alpha(0.6)  # 激活阴影块
-
+                        gds['shadow_patch'].set_alpha(0.6)
                     gds['patch'].set_alpha(0.8)
                     gds['patch'].set_linewidth(3.0)
-                    gds['patch'].set_edgecolor('#00FFFF')  # 青色高亮边框
-                    gds['patch'].set_hatch('///')  # 斜纹标记
-
+                    gds['patch'].set_edgecolor('#00FFFF')
+                    gds['patch'].set_hatch('///')
                     if gds.get('collection'):
                         gds['collection'].set_edgecolor('#00FFFF')
                         gds['collection'].set_linewidth(1.5)
                 else:
-                    # 隐藏阴影图层，器件恢复原状
                     if 'shadow_patch' in gds and gds['shadow_patch']:
-                        gds['shadow_patch'].set_alpha(0.0)  # 隐藏阴影块
-
+                        gds['shadow_patch'].set_alpha(0.0)
                     gds['patch'].set_alpha(0.3)
                     gds['patch'].set_linewidth(1.0)
                     gds['patch'].set_edgecolor(gds['color'])
                     gds['patch'].set_hatch(None)
-
                     if gds.get('collection'):
                         gds['collection'].set_edgecolor(mcolors.to_rgba(gds['color'], alpha=0.9))
                         gds['collection'].set_linewidth(0.5)
+
+        # 2. 更新手动绘制的文字和形状 (user_texts, user_shapes) 的高亮状态
+        for i, ut in enumerate(self.user_texts):
+            if 'text_obj' in ut and ut['text_obj']:
+                if getattr(self, 'active_shape_type', None) == 'text' and getattr(self, 'active_shape_idx', -1) == i:
+                    ut['text_obj'].set_edgecolor('white')
+                    ut['text_obj'].set_linewidth(1.5)
+                else:
+                    ut['text_obj'].set_edgecolor('none')
+                    ut['text_obj'].set_linewidth(0)
+
+        for i, s in enumerate(self.user_shapes):
+            if 'patch' in s and s['patch']:
+                if getattr(self, 'active_shape_type', None) == 'shape' and getattr(self, 'active_shape_idx', -1) == i:
+                    s['patch'].set_edgecolor('white')  # 选中时变为白色边框
+                    s['patch'].set_linewidth(3.0)  # 加粗
+                    s['patch'].set_linestyle('--')  # 虚线标记
+                else:
+                    # 恢复默认样式
+                    ec = '#FF8C00' if s['type'] == 'box' else '#00CED1'
+                    if s['type'] == 'polygon': ec = '#32CD32'
+                    if s['type'] == 'path': ec = '#9370DB'
+                    s['patch'].set_edgecolor(ec)
+                    s['patch'].set_linewidth(2 if s['type'] in ['box', 'via_array'] else 1)
+                    s['patch'].set_linestyle('-')
 
         self.canvas.draw_idle()
 
@@ -836,6 +862,10 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         self.user_shapes.clear();
         self.crop_box = None
         self.clear_active_measurement();
+
+        self.active_shape_type = None
+        self.active_shape_idx = -1
+
         self.draw_preview(reset_view=False)
 
     def clear_active_measurement(self):
@@ -914,18 +944,35 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         except:
             pass
 
-    # ================= 修改 2：在执行删除时屏蔽 UI 信号更新，避免由于下标错位导致的闪退 =================
+    # ================= 修改处：让 Delete 键和 Del 按钮可以删除形状 =================
     def action_delete_selected(self):
+        # 1. 优先检查是否选中了自定义文字
+        if getattr(self, 'active_shape_type', None) == 'text' and self.active_shape_idx != -1:
+            self.save_snapshot()
+            del self.user_texts[self.active_shape_idx]
+            self.active_shape_type = None
+            self.active_shape_idx = -1
+            self.draw_preview(reset_view=False)
+            return
+
+        # 2. 检查是否选中了辅助形状(Box, ViaArray等)
+        if getattr(self, 'active_shape_type', None) == 'shape' and self.active_shape_idx != -1:
+            self.save_snapshot()
+            del self.user_shapes[self.active_shape_idx]
+            self.active_shape_type = None
+            self.active_shape_idx = -1
+            self.draw_preview(reset_view=False)
+            return
+
+        # 3. 如果没选中辅助图形，就走原来的逻辑去删选中的 GDS
         selection = sorted([item.row() for item in self.list_widget.selectedItems()], reverse=True)
         if selection:
             self.save_snapshot()
-
-            # --- 阻止信号避免 Qt 产生递归错误 ---
             self.list_widget.blockSignals(True)
             for idx in selection:
                 del self.gds_list[idx];
                 self.list_widget.takeItem(idx)
-            self.list_widget.clearSelection()  # 必须清理残余的选择状态
+            self.list_widget.clearSelection()
             self.list_widget.blockSignals(False)
 
             self.refresh_layer_list()
@@ -1159,10 +1206,19 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         for line in self.guide_lines: line.remove()
         self.guide_lines.clear()
 
+        # ================= 修改处：点中文字或辅助图形时，标记为选中，并取消选择背景GDS =================
         for i in range(len(self.user_texts) - 1, -1, -1):
             if 'text_obj' in self.user_texts[i] and self.user_texts[i]['text_obj']:
                 cont, _ = self.user_texts[i]['text_obj'].contains(event)
                 if cont and event.button == 1:
+                    # 标记选中辅助文字
+                    self.active_shape_type = 'text'
+                    self.active_shape_idx = i
+                    self.list_widget.blockSignals(True)
+                    self.list_widget.clearSelection()  # 取消所有其他选中
+                    self.list_widget.blockSignals(False)
+                    self.update_canvas_selection()
+
                     self.dragging_type = 'text';
                     self.dragging_idx = i
                     self.drag_start_x, self.drag_start_y = event.xdata, event.ydata
@@ -1173,6 +1229,14 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             if 'patch' in self.user_shapes[i] and self.user_shapes[i]['patch']:
                 cont, _ = self.user_shapes[i]['patch'].contains(event)
                 if cont and event.button == 1:
+                    # 标记选中辅助形状
+                    self.active_shape_type = 'shape'
+                    self.active_shape_idx = i
+                    self.list_widget.blockSignals(True)
+                    self.list_widget.clearSelection()  # 取消所有其他选中
+                    self.list_widget.blockSignals(False)
+                    self.update_canvas_selection()
+
                     self.dragging_type = 'shape';
                     self.dragging_idx = i
                     self.drag_start_x, self.drag_start_y = event.xdata, event.ydata
@@ -1182,6 +1246,10 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         clicked_idx = next(
             (i for i in range(len(self.gds_list) - 1, -1, -1) if self.gds_list[i]['patch'].contains(event)[0]), -1)
         if clicked_idx != -1:
+            # 如果点中了 GDS，清空形状的选择状态
+            self.active_shape_type = None
+            self.active_shape_idx = -1
+
             if event.button in [2, 3]:
                 self.show_context_menu(clicked_idx);
                 return
@@ -1194,7 +1262,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
 
                 current_selection = [item.row() for item in self.list_widget.selectedItems()]
 
-                # ================= 修改 3：在这里使用阻塞信号，从根源掐断引起崩溃的 Qt 信号环路 =================
                 self.list_widget.blockSignals(True)
                 try:
                     if self.ctrl_pressed:
@@ -1210,11 +1277,13 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
 
                 self.drag_start_offsets = {idx: (self.gds_list[idx]['offset_x'], self.gds_list[idx]['offset_y']) for idx
                                            in [item.row() for item in self.list_widget.selectedItems()]}
-                # 只有这里统一安全地调用一次更新
                 self.on_listbox_select()
                 return
 
         elif event.button == 1 and not self.ctrl_pressed:
+            # 如果点中了背景空白处，全清状态
+            self.active_shape_type = None
+            self.active_shape_idx = -1
             self.list_widget.blockSignals(True)
             self.list_widget.clearSelection()
             self.list_widget.blockSignals(False)
@@ -1427,7 +1496,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             gds['patch'].set_x(nx_final);
             gds['patch'].set_y(ny_final)
 
-            # --- 拖拽时同步更新底层阴影方块的位置 ---
             if 'shadow_patch' in gds and gds['shadow_patch']:
                 shadow_offset = min(self.block_w, self.block_h) * 0.015
                 gds['shadow_patch'].set_x(nx_final + shadow_offset)
