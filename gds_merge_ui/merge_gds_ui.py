@@ -36,15 +36,19 @@ class GDSMultiStitcherApp:
         else:
             self.root = tk.Tk()
 
-        self.root.title("GDS MERGER Pro - DnD & Staggered Dummy Fill")
+        self.root.title("GDS Merger & Dummy Fill")
 
-        window_width = 1280
-        window_height = 900
-        screen_width = self.root.winfo_screenwidth()
-        screen_height = self.root.winfo_screenheight()
-        x_cordinate = int((screen_width / 2) - (window_width / 2))
-        y_cordinate = int((screen_height / 2) - (window_height / 2))
-        self.root.geometry(f"{window_width}x{window_height}+{x_cordinate}+{y_cordinate}")
+        # --- 跨平台窗口最大化 ---
+        try:
+            self.root.state('zoomed')  # Windows 系统的最大化指令
+        except tk.TclError:
+            try:
+                self.root.attributes('-zoomed', True)  # Linux 系统的最大化指令
+            except tk.TclError:
+                # 备用方案：如果系统不支持 zoomed，则强制设置为屏幕分辨率大小
+                screen_width = self.root.winfo_screenwidth()
+                screen_height = self.root.winfo_screenheight()
+                self.root.geometry(f"{screen_width}x{screen_height}+0+0")
 
         self.gds_list, self.measurements, self.undo_stack, self.guide_lines, self.overlap_patches = [], [], [], [], []
         self.dragging_idx = -1
