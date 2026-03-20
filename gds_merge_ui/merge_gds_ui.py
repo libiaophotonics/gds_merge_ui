@@ -130,10 +130,8 @@ class GDSMultiStitcherApp:
                 self.tree.selection_add(item)
 
     def refresh_gds_list_ui(self):
-        # 1. 刷新 GDS 列表
         for item in self.tree.get_children():
             self.tree.delete(item)
-        # 2. 刷新去重后的图层列表
         for item in self.layer_tree.get_children():
             self.layer_tree.delete(item)
 
@@ -150,7 +148,7 @@ class GDSMultiStitcherApp:
         main_frame = ttk.Frame(self.root, padding=10)
         main_frame.pack(fill=tk.BOTH, expand=True)
 
-        # === 左侧面板 (加宽至420以容纳双列表) ===
+        # === 左侧面板 ===
         left_frame = ttk.Frame(main_frame, width=420)
         left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
         left_frame.pack_propagate(False)
@@ -167,13 +165,16 @@ class GDSMultiStitcherApp:
         ttk.Button(proj_frame, text="💾 Save Project", command=self.action_save_project).pack(side=tk.LEFT, fill=tk.X,
                                                                                              expand=True, padx=(2, 0))
 
-        # --- GDS 与 Layer 双列表容器 ---
-        list_pane = ttk.PanedWindow(top_container, orient=tk.HORIZONTAL)
+        # --- GDS 与 Layer 双列表容器 (采用 Grid 实现完美等高对齐) ---
+        list_pane = ttk.Frame(top_container)
         list_pane.pack(fill=tk.BOTH, expand=True, pady=(0, 5))
+        list_pane.columnconfigure(0, weight=5)  # GDS 列表占比
+        list_pane.columnconfigure(1, weight=2)  # Layer 列表占比
+        list_pane.rowconfigure(0, weight=1)  # 垂直填满
 
         # 1a. GDS Files (左半边)
         gds_list_frame = ttk.LabelFrame(list_pane, text="1a. GDS Files", padding=2)
-        list_pane.add(gds_list_frame, weight=3)
+        gds_list_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 2))
 
         btn_frame = ttk.Frame(gds_list_frame)
         btn_frame.pack(fill=tk.X, pady=(0, 2))
@@ -205,9 +206,14 @@ class GDSMultiStitcherApp:
             self.tree.drop_target_register(DND_FILES)
             self.tree.dnd_bind('<<Drop>>', self.on_file_drop)
 
-        # 1c. Global Layers (右半边，自动汇总去重)
+        # 1c. Global Layers (右半边)
         layer_list_frame = ttk.LabelFrame(list_pane, text="Layers (Unique)", padding=2)
-        list_pane.add(layer_list_frame, weight=1)
+        layer_list_frame.grid(row=0, column=1, sticky="nsew", padx=(2, 0))
+
+        # 新增一个 Refresh 按钮，用于和左侧对齐高度，并刷新图层
+        l_btn_frame = ttk.Frame(layer_list_frame)
+        l_btn_frame.pack(fill=tk.X, pady=(0, 2))
+        ttk.Button(l_btn_frame, text="🔄 Refresh", command=self.refresh_gds_list_ui).pack(fill=tk.X, expand=True)
 
         layer_tree_frame = ttk.Frame(layer_list_frame)
         layer_tree_frame.pack(fill=tk.BOTH, expand=True)
@@ -1071,7 +1077,6 @@ class GDSMultiStitcherApp:
         if not event.inaxes: return
         self.last_mouse_event = event
 
-        # 1. 优先捕获双击事件 (用于唤出所有自定义图形的属性编辑面板)
         if event.dblclick and event.button == 1:
             for i in range(len(self.user_texts) - 1, -1, -1):
                 if 'text_obj' in self.user_texts[i] and self.user_texts[i]['text_obj']:
@@ -1085,7 +1090,6 @@ class GDSMultiStitcherApp:
 
         snap_x, snap_y, _, _ = self.get_snapped_coordinate(event.xdata, event.ydata)
 
-        # --- 测量与绘图的 Ortho 判定 ---
         if (self.measure_mode_var.get() and self.measure_state == 1 and self.measure_start_pt) or \
                 (self.draw_mode in ['polygon', 'path'] and self.draw_points):
 
@@ -1100,7 +1104,6 @@ class GDSMultiStitcherApp:
                 else:
                     snap_x = last_x
 
-        # 2. 交互式绘图模式
         if self.draw_mode is not None:
             if self.draw_mode == 'text':
                 if event.button == 1:
@@ -1123,15 +1126,14 @@ class GDSMultiStitcherApp:
 
             elif self.draw_mode in ['polygon', 'path']:
                 if event.button == 1:
-                    self.draw_points.append((snap_x, snap_y))  # 左键加点
-                elif event.button == 3:  # 右键结束
+                    self.draw_points.append((snap_x, snap_y))
+                elif event.button == 3:
                     if len(self.draw_points) >= (3 if self.draw_mode == 'polygon' else 2):
                         self.finalize_shape()
                     else:
                         self.cancel_draw_mode()
                 return
 
-        # 3. 处理测量点击
         if self.measure_mode_var.get() and event.button == 1:
             if self.measure_state == 0:
                 self.clear_active_measurement()
@@ -1157,7 +1159,6 @@ class GDSMultiStitcherApp:
         for line in self.guide_lines: line.remove()
         self.guide_lines.clear()
 
-        # 4. 检测是否点击了 Text
         for i in range(len(self.user_texts) - 1, -1, -1):
             if 'text_obj' in self.user_texts[i] and self.user_texts[i]['text_obj']:
                 cont, _ = self.user_texts[i]['text_obj'].contains(event)
@@ -1168,7 +1169,6 @@ class GDSMultiStitcherApp:
                     self.rect_start_x, self.rect_start_y = self.user_texts[i]['x'], self.user_texts[i]['y']
                     return
 
-        # 5. 检测是否点击了绘制形状 User Shapes
         for i in range(len(self.user_shapes) - 1, -1, -1):
             if 'patch' in self.user_shapes[i] and self.user_shapes[i]['patch']:
                 cont, _ = self.user_shapes[i]['patch'].contains(event)
@@ -1179,7 +1179,6 @@ class GDSMultiStitcherApp:
                     self.drag_start_offsets = list(self.user_shapes[i]['points'])
                     return
 
-        # 6. 检测是否点击了 GDS
         clicked_idx = next(
             (i for i in range(len(self.gds_list) - 1, -1, -1) if self.gds_list[i]['patch'].contains(event)[0]), -1)
         if clicked_idx != -1:
@@ -1218,7 +1217,6 @@ class GDSMultiStitcherApp:
         self.last_mouse_event = event
         snap_x, snap_y, sn_x, sn_y = self.get_snapped_coordinate(event.xdata, event.ydata)
 
-        # --- 测量与绘图的动态 Ortho 预览判定 ---
         if (self.measure_mode_var.get() and self.measure_state == 1 and self.measure_start_pt) or \
                 (self.draw_mode in ['polygon', 'path'] and self.draw_points):
 
@@ -1233,7 +1231,6 @@ class GDSMultiStitcherApp:
                 else:
                     snap_x = last_x
 
-        # 绘图模式下的动态预览
         if self.draw_mode is not None:
             if self.draw_mode == 'text':
                 if not self.temp_draw_preview:
@@ -1276,7 +1273,6 @@ class GDSMultiStitcherApp:
             self.canvas.draw_idle();
             return
 
-        # 测量预览
         if self.measure_mode_var.get():
             if not self.snap_indicator:
                 self.snap_indicator, = self.ax.plot([snap_x], [snap_y], marker='+', color='red', markersize=12,
