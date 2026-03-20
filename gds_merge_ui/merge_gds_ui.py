@@ -107,6 +107,41 @@ class GDSMultiStitcherApp:
         self.setup_ui()
         self.draw_preview(reset_view=True)
 
+    # ================= 列表视图辅助函数 =================
+    def get_selected_indices(self):
+        return [self.tree.index(item) for item in self.tree.selection()]
+
+    def clear_selection(self):
+        self.tree.selection_remove(self.tree.selection())
+
+    def set_selection(self, idx):
+        self.clear_selection()
+        items = self.tree.get_children()
+        if 0 <= idx < len(items):
+            self.tree.selection_set(items[idx])
+
+    def toggle_selection(self, idx):
+        items = self.tree.get_children()
+        if 0 <= idx < len(items):
+            item = items[idx]
+            if item in self.tree.selection():
+                self.tree.selection_remove(item)
+            else:
+                self.tree.selection_add(item)
+
+    def format_layers(self, layers):
+        if not layers: return "None"
+        unique_layers = sorted(list(set(layers)))
+        return ", ".join([f"{l}/{d}" for l, d in unique_layers])
+
+    def refresh_gds_list_ui(self):
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        for i, gds in enumerate(self.gds_list):
+            layer_str = self.format_layers(gds.get('layers', []))
+            self.tree.insert("", tk.END, values=(f"[{i + 1}] {gds['name']}", layer_str))
+
+    # ================= UI 搭建 =================
     def setup_ui(self):
         main_frame = ttk.Frame(self.root, padding=10)
         main_frame.pack(fill=tk.BOTH, expand=True)
@@ -128,6 +163,7 @@ class GDSMultiStitcherApp:
         ttk.Button(proj_frame, text="💾 Save Project", command=self.action_save_project).pack(side=tk.LEFT, fill=tk.X,
                                                                                              expand=True, padx=(2, 0))
 
+        # --- 新版 Treeview 列表区域 ---
         list_frame = ttk.LabelFrame(top_container, text="1a. GDS File List", padding=5)
         list_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 5))
 
@@ -138,17 +174,32 @@ class GDSMultiStitcherApp:
         ttk.Button(btn_frame, text="➖ Remove", command=self.action_delete_selected).pack(side=tk.LEFT, fill=tk.X,
                                                                                          expand=True, padx=(2, 0))
 
-        scrollbar = ttk.Scrollbar(list_frame)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.listbox = tk.Listbox(list_frame, yscrollcommand=scrollbar.set, font=('Arial', 10),
-                                  selectbackground="#0078D7", exportselection=False, selectmode=tk.EXTENDED)
-        self.listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.config(command=self.listbox.yview)
-        self.listbox.bind('<<ListboxSelect>>', self.on_listbox_select)
-        if DND_SUPPORTED:
-            self.listbox.drop_target_register(DND_FILES)
-            self.listbox.dnd_bind('<<Drop>>', self.on_file_drop)
+        tree_frame = ttk.Frame(list_frame)
+        tree_frame.pack(fill=tk.BOTH, expand=True)
 
+        scrollbar_y = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL)
+        scrollbar_x = ttk.Scrollbar(tree_frame, orient=tk.HORIZONTAL)
+
+        self.tree = ttk.Treeview(tree_frame, columns=("Name", "Layers"), show="headings", selectmode="extended",
+                                 yscrollcommand=scrollbar_y.set, xscrollcommand=scrollbar_x.set)
+        self.tree.heading("Name", text="GDS Name")
+        self.tree.heading("Layers", text="Layers (L/D)")
+        self.tree.column("Name", width=140, anchor=tk.W, minwidth=100)
+        self.tree.column("Layers", width=180, anchor=tk.W, minwidth=100)
+
+        scrollbar_y.pack(side=tk.RIGHT, fill=tk.Y)
+        scrollbar_x.pack(side=tk.BOTTOM, fill=tk.X)
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        scrollbar_y.config(command=self.tree.yview)
+        scrollbar_x.config(command=self.tree.xview)
+
+        self.tree.bind('<<TreeviewSelect>>', self.on_listbox_select)
+        if DND_SUPPORTED:
+            self.tree.drop_target_register(DND_FILES)
+            self.tree.dnd_bind('<<Drop>>', self.on_file_drop)
+
+        # --- 设置与面板区域 ---
         block_settings_frame = ttk.LabelFrame(bottom_container, text="1b. Total Block Size (um)", padding=5)
         block_settings_frame.pack(fill=tk.X, pady=(0, 5))
         entry_f = ttk.Frame(block_settings_frame)
@@ -286,6 +337,7 @@ class GDSMultiStitcherApp:
         status_bar = ttk.Label(self.root, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W)
         status_bar.pack(side=tk.BOTTOM, fill=tk.X)
 
+    # ================= 事件绑定与基础逻辑 =================
     def on_key_press(self, event):
         if event.key in ['control', 'ctrl']:
             self.ctrl_pressed = True
@@ -316,7 +368,7 @@ class GDSMultiStitcherApp:
                         'patch': None, 'center_text': None, 'true_polygons': true_polygons, 'poly_patches': [],
                         'layers': layers}
             self.gds_list.append(gds_info)
-            self.listbox.insert(tk.END, f"[{len(self.gds_list)}] {base_name}")
+            self.refresh_gds_list_ui()
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load {filepath}:\n{str(e)}")
 
@@ -373,15 +425,14 @@ class GDSMultiStitcherApp:
     def action_undo(self):
         if not self.undo_stack: return
         snapshot = self.undo_stack.pop()
-        self.gds_list.clear();
-        self.listbox.delete(0, tk.END)
+        self.gds_list.clear()
         for item in snapshot['gds_list']:
             gds_info = {'path': item['path'], 'name': item['name'], 'base_bbox': item['base_bbox'],
                         'trans': item['trans'], 'offset_x': item['offset_x'], 'offset_y': item['offset_y'],
                         'color': item['color'], 'patch': None, 'center_text': None,
                         'true_polygons': item['true_polygons'], 'poly_patches': [], 'layers': item.get('layers', [])}
-            self.gds_list.append(gds_info);
-            self.listbox.insert(tk.END, f"[{len(self.gds_list)}] {item['name']}")
+            self.gds_list.append(gds_info)
+        self.refresh_gds_list_ui()
         self.measurements = snapshot.get('measurements', [])
         self.user_texts = snapshot.get('user_texts', [])
         self.user_shapes = snapshot.get('user_shapes', [])
@@ -418,8 +469,7 @@ class GDSMultiStitcherApp:
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 project_data = json.load(f)
-            self.gds_list.clear();
-            self.listbox.delete(0, tk.END)
+            self.gds_list.clear()
             self.measurements = project_data.get("measurements", [])
             self.user_texts = project_data.get("user_texts", [])
             self.user_shapes = project_data.get("user_shapes", [])
@@ -442,8 +492,8 @@ class GDSMultiStitcherApp:
                             'offset_x': item["offset_x"], 'offset_y': item["offset_y"], 'color': item["color"],
                             'patch': None, 'center_text': None, 'true_polygons': true_polygons, 'poly_patches': [],
                             'layers': layers}
-                self.gds_list.append(gds_info);
-                self.listbox.insert(tk.END, f"[{len(self.gds_list)}] {name}")
+                self.gds_list.append(gds_info)
+            self.refresh_gds_list_ui()
             self.draw_preview(reset_view=True)
         except Exception as e:
             messagebox.showerror("Error", str(e))
@@ -487,7 +537,7 @@ class GDSMultiStitcherApp:
         s = self.user_shapes[idx]
         dialog = tk.Toplevel(self.root)
         dialog.title(f"Edit {s['type'].capitalize()}")
-        dialog.geometry("260x280")  # 高度加长以适配 Box 属性
+        dialog.geometry("260x280")
         dialog.transient(self.root);
         dialog.grab_set()
 
@@ -609,8 +659,6 @@ class GDSMultiStitcherApp:
         self.canvas.draw_idle();
         self.status_var.set("Ready")
 
-    # =========================================================
-
     def open_layer_mapping_dialog(self):
         dialog = tk.Toplevel(self.root)
         dialog.title("Global Layer Mapping");
@@ -671,7 +719,7 @@ class GDSMultiStitcherApp:
         ttk.Button(dialog, text="关闭并保存", command=dialog.destroy).pack(pady=10)
 
     def update_canvas_selection(self):
-        selected_indices = self.listbox.curselection()
+        selected_indices = self.get_selected_indices()
         for i, gds in enumerate(self.gds_list):
             if gds['patch']:
                 if i in selected_indices:
@@ -693,7 +741,7 @@ class GDSMultiStitcherApp:
             self.distribute_selected(mode[-1])
 
     def align_selected(self, mode):
-        selection = self.listbox.curselection()
+        selection = self.get_selected_indices()
         if len(selection) < 2: return
         self.save_snapshot()
         bboxes = [self.get_bbox(self.gds_list[i]) for i in selection]
@@ -725,7 +773,7 @@ class GDSMultiStitcherApp:
         self.on_listbox_select()
 
     def distribute_selected(self, axis):
-        selection = self.listbox.curselection()
+        selection = self.get_selected_indices()
         if len(selection) < 3: return
         self.save_snapshot()
         items = [{'idx': i, 'gds': self.gds_list[i], 'l': self.get_bbox(self.gds_list[i])[0],
@@ -751,7 +799,7 @@ class GDSMultiStitcherApp:
         if self.measure_mode_var.get():
             self.cancel_draw_mode()
             self.status_var.set("Measure Mode ON: Click once to start, click again to finish. (Hold Ctrl for Ortho)")
-            self.listbox.selection_clear(0, tk.END);
+            self.clear_selection();
             self.update_canvas_selection()
         else:
             self.status_var.set("Measure Mode OFF.")
@@ -813,7 +861,7 @@ class GDSMultiStitcherApp:
                         t_box.bottom + t_box.top) / 2
 
     def on_listbox_select(self, event=None):
-        selection = self.listbox.curselection()
+        selection = self.get_selected_indices()
         if selection:
             x, y = self.get_anchor_coords(self.gds_list[selection[0]], self.anchor_var.get())
             self.selected_x_var.set(f"{x:.3f}");
@@ -825,7 +873,7 @@ class GDSMultiStitcherApp:
         self.on_listbox_select()
 
     def apply_manual_position(self):
-        selection = self.listbox.curselection()
+        selection = self.get_selected_indices()
         if not selection: return
         self.save_snapshot()
         try:
@@ -858,12 +906,11 @@ class GDSMultiStitcherApp:
             pass
 
     def action_delete_selected(self):
-        selection = self.listbox.curselection()
+        selection = self.get_selected_indices()
         if selection:
             self.save_snapshot()
             for idx in sorted(selection, reverse=True): del self.gds_list[idx]
-            self.listbox.delete(0, tk.END)
-            for i, gds in enumerate(self.gds_list): self.listbox.insert(tk.END, f"[{i + 1}] {gds['name']}")
+            self.refresh_gds_list_ui()
             self.selected_x_var.set("0.0");
             self.selected_y_var.set("0.0")
             self.draw_preview(reset_view=False)
@@ -1001,7 +1048,6 @@ class GDSMultiStitcherApp:
         if not event.inaxes: return
         self.last_mouse_event = event
 
-        # 1. 优先捕获双击事件 (用于唤出所有自定义图形的属性编辑面板)
         if event.dblclick and event.button == 1:
             for i in range(len(self.user_texts) - 1, -1, -1):
                 if 'text_obj' in self.user_texts[i] and self.user_texts[i]['text_obj']:
@@ -1015,7 +1061,6 @@ class GDSMultiStitcherApp:
 
         snap_x, snap_y, _, _ = self.get_snapped_coordinate(event.xdata, event.ydata)
 
-        # --- 测量与绘图的 Ortho 判定 ---
         if (self.measure_mode_var.get() and self.measure_state == 1 and self.measure_start_pt) or \
                 (self.draw_mode in ['polygon', 'path'] and self.draw_points):
 
@@ -1030,7 +1075,6 @@ class GDSMultiStitcherApp:
                 else:
                     snap_x = last_x
 
-        # 2. 交互式绘图模式
         if self.draw_mode is not None:
             if self.draw_mode == 'text':
                 if event.button == 1:
@@ -1053,15 +1097,14 @@ class GDSMultiStitcherApp:
 
             elif self.draw_mode in ['polygon', 'path']:
                 if event.button == 1:
-                    self.draw_points.append((snap_x, snap_y))  # 左键加点
-                elif event.button == 3:  # 右键结束
+                    self.draw_points.append((snap_x, snap_y))
+                elif event.button == 3:
                     if len(self.draw_points) >= (3 if self.draw_mode == 'polygon' else 2):
                         self.finalize_shape()
                     else:
                         self.cancel_draw_mode()
                 return
 
-        # 3. 处理测量点击
         if self.measure_mode_var.get() and event.button == 1:
             if self.measure_state == 0:
                 self.clear_active_measurement()
@@ -1087,7 +1130,6 @@ class GDSMultiStitcherApp:
         for line in self.guide_lines: line.remove()
         self.guide_lines.clear()
 
-        # 4. 检测是否点击了 Text
         for i in range(len(self.user_texts) - 1, -1, -1):
             if 'text_obj' in self.user_texts[i] and self.user_texts[i]['text_obj']:
                 cont, _ = self.user_texts[i]['text_obj'].contains(event)
@@ -1098,7 +1140,6 @@ class GDSMultiStitcherApp:
                     self.rect_start_x, self.rect_start_y = self.user_texts[i]['x'], self.user_texts[i]['y']
                     return
 
-        # 5. 检测是否点击了绘制形状 User Shapes
         for i in range(len(self.user_shapes) - 1, -1, -1):
             if 'patch' in self.user_shapes[i] and self.user_shapes[i]['patch']:
                 cont, _ = self.user_shapes[i]['patch'].contains(event)
@@ -1109,7 +1150,6 @@ class GDSMultiStitcherApp:
                     self.drag_start_offsets = list(self.user_shapes[i]['points'])
                     return
 
-        # 6. 检测是否点击了 GDS
         clicked_idx = next(
             (i for i in range(len(self.gds_list) - 1, -1, -1) if self.gds_list[i]['patch'].contains(event)[0]), -1)
         if clicked_idx != -1:
@@ -1121,20 +1161,18 @@ class GDSMultiStitcherApp:
                 self.drag_start_x, self.drag_start_y = event.xdata, event.ydata
                 self.rect_start_x, self.rect_start_y = self.gds_list[clicked_idx]['patch'].get_x(), \
                 self.gds_list[clicked_idx]['patch'].get_y()
-                current_selection = list(self.listbox.curselection())
+                current_selection = self.get_selected_indices()
                 if event.key in ['control', 'ctrl']:
-                    self.listbox.selection_clear(
-                        clicked_idx) if clicked_idx in current_selection else self.listbox.selection_set(clicked_idx)
+                    self.toggle_selection(clicked_idx)
                 elif clicked_idx not in current_selection:
-                    self.listbox.selection_clear(0, tk.END);
-                    self.listbox.selection_set(clicked_idx)
+                    self.set_selection(clicked_idx)
                 self.drag_start_offsets = {idx: (self.gds_list[idx]['offset_x'], self.gds_list[idx]['offset_y']) for idx
-                                           in self.listbox.curselection()}
+                                           in self.get_selected_indices()}
                 self.on_listbox_select();
                 return
 
         elif event.button == 1 and event.key not in ['control', 'ctrl']:
-            self.listbox.selection_clear(0, tk.END);
+            self.clear_selection();
             self.update_canvas_selection()
 
     def finalize_shape(self):
@@ -1150,7 +1188,6 @@ class GDSMultiStitcherApp:
         self.last_mouse_event = event
         snap_x, snap_y, sn_x, sn_y = self.get_snapped_coordinate(event.xdata, event.ydata)
 
-        # --- 测量与绘图的动态 Ortho 预览判定 ---
         if (self.measure_mode_var.get() and self.measure_state == 1 and self.measure_start_pt) or \
                 (self.draw_mode in ['polygon', 'path'] and self.draw_points):
 
@@ -1165,7 +1202,6 @@ class GDSMultiStitcherApp:
                 else:
                     snap_x = last_x
 
-        # 绘图模式下的动态预览
         if self.draw_mode is not None:
             if self.draw_mode == 'text':
                 if not self.temp_draw_preview:
@@ -1208,7 +1244,6 @@ class GDSMultiStitcherApp:
             self.canvas.draw_idle();
             return
 
-        # 测量预览
         if self.measure_mode_var.get():
             if not self.snap_indicator:
                 self.snap_indicator, = self.ax.plot([snap_x], [snap_y], marker='+', color='red', markersize=12,
@@ -1354,7 +1389,7 @@ class GDSMultiStitcherApp:
             if best_snap_y is not None: self.guide_lines.append(
                 self.ax.axhline(y=best_snap_y, color='#FF8C00', linestyle='--', linewidth=1.5, zorder=200))
 
-        if self.listbox.curselection() and self.listbox.curselection()[0] == self.dragging_idx:
+        if self.get_selected_indices() and self.get_selected_indices()[0] == self.dragging_idx:
             x, y = self.get_anchor_coords(handle_gds, self.anchor_var.get())
             self.selected_x_var.set(f"{x:.3f}");
             self.selected_y_var.set(f"{y:.3f}")
@@ -1394,7 +1429,7 @@ class GDSMultiStitcherApp:
              'offset_x': o['offset_x'] + 200, 'offset_y': o['offset_y'] - 200, 'color': o['color'], 'patch': None,
              'center_text': None, 'true_polygons': o['true_polygons'], 'poly_patches': [],
              'layers': o.get('layers', [])})
-        self.listbox.insert(tk.END, f"[{len(self.gds_list)}] {o['name']}")
+        self.refresh_gds_list_ui()
         self.draw_preview()
 
     def action_create_array(self, idx):
@@ -1428,7 +1463,7 @@ class GDSMultiStitcherApp:
                              'offset_y': o['offset_y'] + i * sy, 'color': o['color'], 'patch': None,
                              'center_text': None, 'true_polygons': o['true_polygons'], 'poly_patches': [],
                              'layers': o.get('layers', [])})
-                        self.listbox.insert(tk.END, f"[{len(self.gds_list)}] {self.gds_list[-1]['name']}")
+                self.refresh_gds_list_ui()
                 self.draw_preview();
                 self.status_var.set(f"Array created: {r}x{c} for {o['name']}");
                 dialog.destroy()
