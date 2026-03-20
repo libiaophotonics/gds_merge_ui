@@ -148,8 +148,8 @@ class GDSMultiStitcherApp:
         main_frame = ttk.Frame(self.root, padding=10)
         main_frame.pack(fill=tk.BOTH, expand=True)
 
-        # === 左侧面板 ===
-        left_frame = ttk.Frame(main_frame, width=420)
+        # === 左侧面板 (恢复为360宽度) ===
+        left_frame = ttk.Frame(main_frame, width=360)
         left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
         left_frame.pack_propagate(False)
 
@@ -165,16 +165,9 @@ class GDSMultiStitcherApp:
         ttk.Button(proj_frame, text="💾 Save Project", command=self.action_save_project).pack(side=tk.LEFT, fill=tk.X,
                                                                                              expand=True, padx=(2, 0))
 
-        # --- GDS 与 Layer 双列表容器 (采用 Grid 实现完美等高对齐) ---
-        list_pane = ttk.Frame(top_container)
-        list_pane.pack(fill=tk.BOTH, expand=True, pady=(0, 5))
-        list_pane.columnconfigure(0, weight=5)  # GDS 列表占比
-        list_pane.columnconfigure(1, weight=2)  # Layer 列表占比
-        list_pane.rowconfigure(0, weight=1)  # 垂直填满
-
-        # 1a. GDS Files (左半边)
-        gds_list_frame = ttk.LabelFrame(list_pane, text="1a. GDS Files", padding=2)
-        gds_list_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 2))
+        # --- GDS 单独列表 ---
+        gds_list_frame = ttk.LabelFrame(top_container, text="1a. GDS Files", padding=2)
+        gds_list_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 5))
 
         btn_frame = ttk.Frame(gds_list_frame)
         btn_frame.pack(fill=tk.X, pady=(0, 2))
@@ -205,28 +198,6 @@ class GDSMultiStitcherApp:
         if DND_SUPPORTED:
             self.tree.drop_target_register(DND_FILES)
             self.tree.dnd_bind('<<Drop>>', self.on_file_drop)
-
-        # 1c. Global Layers (右半边)
-        layer_list_frame = ttk.LabelFrame(list_pane, text="Layers (Unique)", padding=2)
-        layer_list_frame.grid(row=0, column=1, sticky="nsew", padx=(2, 0))
-
-        # 新增一个 Refresh 按钮，用于和左侧对齐高度，并刷新图层
-        l_btn_frame = ttk.Frame(layer_list_frame)
-        l_btn_frame.pack(fill=tk.X, pady=(0, 2))
-        ttk.Button(l_btn_frame, text="🔄 Refresh", command=self.refresh_gds_list_ui).pack(fill=tk.X, expand=True)
-
-        layer_tree_frame = ttk.Frame(layer_list_frame)
-        layer_tree_frame.pack(fill=tk.BOTH, expand=True)
-
-        l_scroll_y = ttk.Scrollbar(layer_tree_frame, orient=tk.VERTICAL)
-        self.layer_tree = ttk.Treeview(layer_tree_frame, columns=("LD",), show="headings", selectmode="none",
-                                       yscrollcommand=l_scroll_y.set)
-        self.layer_tree.heading("LD", text="L / D")
-        self.layer_tree.column("LD", width=60, anchor=tk.CENTER, minwidth=40)
-
-        l_scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
-        self.layer_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        l_scroll_y.config(command=self.layer_tree.yview)
 
         # --- 设置与面板区域 ---
         block_settings_frame = ttk.LabelFrame(bottom_container, text="1b. Total Block Size (um)", padding=5)
@@ -304,11 +275,37 @@ class GDSMultiStitcherApp:
         ttk.Button(tab_export, text="💾 EXPORT MERGED GDS", command=self.execute_stitch, style="Accent.TButton").pack(
             fill=tk.X, ipady=8)
 
-        # === 右侧画布与工具条 ===
-        right_frame = ttk.LabelFrame(main_frame, text="Interactive Canvas", padding=5)
-        right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+        # === 最右侧面板 (图层列表) ===
+        right_frame = ttk.Frame(main_frame, width=180)
+        right_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=(10, 0))
+        right_frame.pack_propagate(False)
 
-        canvas_toolbar_1 = ttk.Frame(right_frame)
+        layer_list_frame = ttk.LabelFrame(right_frame, text="Layers (Unique)", padding=2)
+        layer_list_frame.pack(fill=tk.BOTH, expand=True)
+
+        l_btn_frame = ttk.Frame(layer_list_frame)
+        l_btn_frame.pack(fill=tk.X, pady=(0, 2))
+        ttk.Button(l_btn_frame, text="🔄 Refresh", command=self.refresh_gds_list_ui).pack(fill=tk.X, expand=True)
+
+        layer_tree_frame = ttk.Frame(layer_list_frame)
+        layer_tree_frame.pack(fill=tk.BOTH, expand=True)
+
+        l_scroll_y = ttk.Scrollbar(layer_tree_frame, orient=tk.VERTICAL)
+        self.layer_tree = ttk.Treeview(layer_tree_frame, columns=("LD",), show="headings", selectmode="none",
+                                       yscrollcommand=l_scroll_y.set)
+        self.layer_tree.heading("LD", text="L / D")
+        self.layer_tree.column("LD", width=80, anchor=tk.CENTER, minwidth=40)
+
+        l_scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
+        self.layer_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        l_scroll_y.config(command=self.layer_tree.yview)
+
+        # === 中间画布与工具条 ===
+        center_frame = ttk.LabelFrame(main_frame, text="Interactive Canvas", padding=5)
+        center_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # Toolbar Row 1: 视图, 测量, 覆盖检查, 捕捉
+        canvas_toolbar_1 = ttk.Frame(center_frame)
         canvas_toolbar_1.pack(side=tk.TOP, fill=tk.X, pady=(0, 2))
         ttk.Button(canvas_toolbar_1, text="↩️ Undo", command=self.action_undo).pack(side=tk.LEFT, padx=(0, 2))
         ttk.Button(canvas_toolbar_1, text="🔍 Zoom Fit", command=lambda: self.draw_preview(reset_view=True)).pack(
@@ -316,6 +313,8 @@ class GDSMultiStitcherApp:
         ttk.Separator(canvas_toolbar_1, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=4, pady=2)
         ttk.Checkbutton(canvas_toolbar_1, text="📏 Measure", style="Toolbutton", variable=self.measure_mode_var,
                         command=self.on_measure_toggle).pack(side=tk.LEFT, padx=2)
+        ttk.Button(canvas_toolbar_1, text="🗑️ Clear Annots", command=self.action_clear_annotations).pack(side=tk.LEFT,
+                                                                                                         padx=2)
         ttk.Separator(canvas_toolbar_1, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=4, pady=2)
         self.btn_overlap = ttk.Checkbutton(canvas_toolbar_1, text="🔴 Overlaps", style="Toolbutton",
                                            variable=self.show_overlap_var, command=self.on_overlap_toggle)
@@ -323,36 +322,32 @@ class GDSMultiStitcherApp:
         self.btn_bbox = ttk.Checkbutton(canvas_toolbar_1, text="✅ BBox Only", style="Toolbutton",
                                         variable=self.bbox_only_var, command=self.on_bbox_toggle)
         self.btn_bbox.pack(side=tk.LEFT, padx=2)
+        ttk.Separator(canvas_toolbar_1, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=4, pady=2)
+        ttk.Checkbutton(canvas_toolbar_1, text="🌐 Snap", style="Toolbutton", variable=self.grid_snap_var).pack(
+            side=tk.LEFT, padx=2)
+        ttk.Label(canvas_toolbar_1, text="Size:").pack(side=tk.LEFT, padx=(2, 2))
+        ttk.Entry(canvas_toolbar_1, textvariable=self.grid_size_var, width=6).pack(side=tk.LEFT, padx=2)
 
-        canvas_toolbar_draw = ttk.Frame(right_frame)
-        canvas_toolbar_draw.pack(side=tk.TOP, fill=tk.X, pady=(2, 2))
-        ttk.Button(canvas_toolbar_draw, text="📝 Text", command=self.action_add_text_dialog).pack(side=tk.LEFT, padx=2)
-        ttk.Button(canvas_toolbar_draw, text="🔲 Box", command=lambda: self.action_add_shape_dialog('box')).pack(
-            side=tk.LEFT, padx=2)
-        ttk.Button(canvas_toolbar_draw, text="🔶 Polygon", command=lambda: self.action_add_shape_dialog('polygon')).pack(
-            side=tk.LEFT, padx=2)
-        ttk.Button(canvas_toolbar_draw, text="〰️ Path", command=lambda: self.action_add_shape_dialog('path')).pack(
-            side=tk.LEFT, padx=2)
-        ttk.Separator(canvas_toolbar_draw, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=4, pady=2)
-        ttk.Button(canvas_toolbar_draw, text="🗑️ Clear Custom Annots/Shapes",
-                   command=self.action_clear_annotations).pack(side=tk.LEFT, padx=2)
-
-        canvas_toolbar_2 = ttk.Frame(right_frame)
+        # Toolbar Row 2: 绘图工具, 对齐排列
+        canvas_toolbar_2 = ttk.Frame(center_frame)
         canvas_toolbar_2.pack(side=tk.TOP, fill=tk.X, pady=(2, 5))
+        ttk.Button(canvas_toolbar_2, text="📝 Text", command=self.action_add_text_dialog).pack(side=tk.LEFT, padx=2)
+        ttk.Button(canvas_toolbar_2, text="🔲 Box", command=lambda: self.action_add_shape_dialog('box')).pack(
+            side=tk.LEFT, padx=2)
+        ttk.Button(canvas_toolbar_2, text="🔶 Polygon", command=lambda: self.action_add_shape_dialog('polygon')).pack(
+            side=tk.LEFT, padx=2)
+        ttk.Button(canvas_toolbar_2, text="〰️ Path", command=lambda: self.action_add_shape_dialog('path')).pack(
+            side=tk.LEFT, padx=2)
+        ttk.Separator(canvas_toolbar_2, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=4, pady=2)
         ttk.Label(canvas_toolbar_2, text="Align:").pack(side=tk.LEFT, padx=(0, 2))
         align_cb = ttk.Combobox(canvas_toolbar_2, textvariable=self.align_var,
                                 values=list(self.align_options_map.keys()), state="readonly", width=16)
         align_cb.pack(side=tk.LEFT, padx=(0, 2))
         ttk.Button(canvas_toolbar_2, text="▶ Go", command=self.execute_align).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Separator(canvas_toolbar_2, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=4, pady=2)
-        ttk.Checkbutton(canvas_toolbar_2, text="🌐 Snap", style="Toolbutton", variable=self.grid_snap_var).pack(
-            side=tk.LEFT, padx=2)
-        ttk.Label(canvas_toolbar_2, text="Size:").pack(side=tk.LEFT, padx=(2, 2))
-        ttk.Entry(canvas_toolbar_2, textvariable=self.grid_size_var, width=6).pack(side=tk.LEFT, padx=2)
 
         self.figure = plt.Figure(figsize=(6, 5), dpi=100)
         self.ax = self.figure.add_subplot(111)
-        self.canvas = FigureCanvasTkAgg(self.figure, right_frame)
+        self.canvas = FigureCanvasTkAgg(self.figure, center_frame)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
         self.canvas.mpl_connect('button_press_event', self.on_press)
@@ -391,8 +386,17 @@ class GDSMultiStitcherApp:
             self.save_snapshot()
             base_name = os.path.splitext(os.path.basename(filepath))[0]
             base_bbox, true_polygons, layers = self.parse_gds_info(filepath)
+
+            # 导入时默认将 GDS 放置在 Block 中心
+            cx_block = self.block_width / 2.0
+            cy_block = self.block_height / 2.0
+            cx_gds = (base_bbox.left + base_bbox.right) / 2.0
+            cy_gds = (base_bbox.bottom + base_bbox.top) / 2.0
+            init_offset_x = cx_block - cx_gds
+            init_offset_y = cy_block - cy_gds
+
             gds_info = {'path': filepath, 'name': base_name, 'base_bbox': base_bbox, 'trans': db.DTrans(),
-                        'offset_x': 0.0, 'offset_y': 0.0,
+                        'offset_x': init_offset_x, 'offset_y': init_offset_y,
                         'color': self.color_palette[len(self.gds_list) % len(self.color_palette)],
                         'patch': None, 'center_text': None, 'true_polygons': true_polygons, 'poly_patches': [],
                         'layers': layers}
@@ -1077,6 +1081,7 @@ class GDSMultiStitcherApp:
         if not event.inaxes: return
         self.last_mouse_event = event
 
+        # 1. 优先捕获双击事件 (用于唤出所有自定义图形的属性编辑面板)
         if event.dblclick and event.button == 1:
             for i in range(len(self.user_texts) - 1, -1, -1):
                 if 'text_obj' in self.user_texts[i] and self.user_texts[i]['text_obj']:
@@ -1090,6 +1095,7 @@ class GDSMultiStitcherApp:
 
         snap_x, snap_y, _, _ = self.get_snapped_coordinate(event.xdata, event.ydata)
 
+        # --- 测量与绘图的 Ortho 判定 ---
         if (self.measure_mode_var.get() and self.measure_state == 1 and self.measure_start_pt) or \
                 (self.draw_mode in ['polygon', 'path'] and self.draw_points):
 
@@ -1104,6 +1110,7 @@ class GDSMultiStitcherApp:
                 else:
                     snap_x = last_x
 
+        # 2. 交互式绘图模式
         if self.draw_mode is not None:
             if self.draw_mode == 'text':
                 if event.button == 1:
@@ -1126,14 +1133,15 @@ class GDSMultiStitcherApp:
 
             elif self.draw_mode in ['polygon', 'path']:
                 if event.button == 1:
-                    self.draw_points.append((snap_x, snap_y))
-                elif event.button == 3:
+                    self.draw_points.append((snap_x, snap_y))  # 左键加点
+                elif event.button == 3:  # 右键结束
                     if len(self.draw_points) >= (3 if self.draw_mode == 'polygon' else 2):
                         self.finalize_shape()
                     else:
                         self.cancel_draw_mode()
                 return
 
+        # 3. 处理测量点击
         if self.measure_mode_var.get() and event.button == 1:
             if self.measure_state == 0:
                 self.clear_active_measurement()
@@ -1159,6 +1167,7 @@ class GDSMultiStitcherApp:
         for line in self.guide_lines: line.remove()
         self.guide_lines.clear()
 
+        # 4. 检测是否点击了 Text
         for i in range(len(self.user_texts) - 1, -1, -1):
             if 'text_obj' in self.user_texts[i] and self.user_texts[i]['text_obj']:
                 cont, _ = self.user_texts[i]['text_obj'].contains(event)
@@ -1169,6 +1178,7 @@ class GDSMultiStitcherApp:
                     self.rect_start_x, self.rect_start_y = self.user_texts[i]['x'], self.user_texts[i]['y']
                     return
 
+        # 5. 检测是否点击了绘制形状 User Shapes
         for i in range(len(self.user_shapes) - 1, -1, -1):
             if 'patch' in self.user_shapes[i] and self.user_shapes[i]['patch']:
                 cont, _ = self.user_shapes[i]['patch'].contains(event)
@@ -1179,6 +1189,7 @@ class GDSMultiStitcherApp:
                     self.drag_start_offsets = list(self.user_shapes[i]['points'])
                     return
 
+        # 6. 检测是否点击了 GDS
         clicked_idx = next(
             (i for i in range(len(self.gds_list) - 1, -1, -1) if self.gds_list[i]['patch'].contains(event)[0]), -1)
         if clicked_idx != -1:
@@ -1217,6 +1228,7 @@ class GDSMultiStitcherApp:
         self.last_mouse_event = event
         snap_x, snap_y, sn_x, sn_y = self.get_snapped_coordinate(event.xdata, event.ydata)
 
+        # --- 测量与绘图的动态 Ortho 预览判定 ---
         if (self.measure_mode_var.get() and self.measure_state == 1 and self.measure_start_pt) or \
                 (self.draw_mode in ['polygon', 'path'] and self.draw_points):
 
@@ -1231,6 +1243,7 @@ class GDSMultiStitcherApp:
                 else:
                     snap_x = last_x
 
+        # 绘图模式下的动态预览
         if self.draw_mode is not None:
             if self.draw_mode == 'text':
                 if not self.temp_draw_preview:
@@ -1273,6 +1286,7 @@ class GDSMultiStitcherApp:
             self.canvas.draw_idle();
             return
 
+        # 测量预览
         if self.measure_mode_var.get():
             if not self.snap_indicator:
                 self.snap_indicator, = self.ax.plot([snap_x], [snap_y], marker='+', color='red', markersize=12,
