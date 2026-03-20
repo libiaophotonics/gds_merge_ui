@@ -39,7 +39,7 @@ def make_rounded_corners(input_path, output_path, radius):
 # 获取当前用户的桌面路径 (兼容 Windows / Mac / Linux)
 desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
 
-input_file = os.path.join(desktop_path, "icon2.png")
+input_file = os.path.join(desktop_path, "icon.png")
 output_file = os.path.join(desktop_path, "icon_rounded.png")
 
 # 设置圆角半径

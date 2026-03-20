@@ -1101,22 +1101,37 @@ class GDSMultiStitcherApp:
             target_layout = db.Layout()
             merged_top = target_layout.create_cell(self.top_cell_name_var.get() or "MERGED")
             cache = {}
+
             for idx, g in enumerate(self.gds_list):
                 file_path = g['path']
+
                 if file_path not in cache:
+                    # --- 新增：源文件防丢失校验 ---
+                    if not os.path.exists(file_path):
+                        messagebox.showwarning("File Missing", f"源文件已被移动或删除，将被跳过导出：\n{file_path}")
+                        cache[file_path] = None  # 标记为缺失
+                        continue
+                    # -----------------------------
+
                     src_layout = db.Layout()
                     src_layout.read(file_path)
                     if idx == 0: target_layout.dbu = src_layout.dbu
                     src_top = src_layout.top_cells()[0]
+
                     prefix = f"chip{idx}_"
                     for cell in src_layout.each_cell(): cell.name = prefix + cell.name
+
                     new_cell = target_layout.create_cell(src_top.name)
                     new_cell.copy_tree(src_top)
                     cache[file_path] = new_cell.cell_index()
-                merged_top.insert(
-                    db.DCellInstArray(cache[file_path], db.DTrans(g['offset_x'], g['offset_y']) * g['trans']))
+
+                # 如果文件有效，则执行 Instance 实例化
+                if cache[file_path] is not None:
+                    merged_top.insert(
+                        db.DCellInstArray(cache[file_path], db.DTrans(g['offset_x'], g['offset_y']) * g['trans']))
+
             target_layout.write(out_p)
-            messagebox.showinfo("OK", "Merged Success!")
+            messagebox.showinfo("OK", "Merged Success!\n导出合并成功！")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to export merged GDS:\n{str(e)}")
 
