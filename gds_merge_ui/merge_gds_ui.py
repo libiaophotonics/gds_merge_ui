@@ -291,9 +291,14 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         self.figure.patch.set_facecolor('#2b2b2b')
         self.ax = self.figure.add_subplot(111);
         self.ax.set_facecolor('#1e1e1e')
-        self.canvas = FigureCanvas(self.figure);
+        self.canvas = FigureCanvas(self.figure)
         self.canvas.setFocusPolicy(QtCore.Qt.StrongFocus)
-        center_layout.addWidget(self.canvas)
+
+        # 1. 明确告诉 PyQt5，这个画布在水平和垂直方向上都可以尽可能地扩展
+        self.canvas.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+
+        # 2. 在加入布局时，传入拉伸因子 '1'。这会让画布吸纳所有剩余的空白空间，把底部的状态栏挤到最下面
+        center_layout.addWidget(self.canvas, 1)
 
         self.canvas.mpl_connect('button_press_event', self.on_press)
         self.canvas.mpl_connect('motion_notify_event', self.on_motion)
@@ -685,7 +690,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
     # ================= 修改处：将 user_shapes 纳入统一视觉高亮体系 =================
     def update_canvas_selection(self):
         # 1. 更新 GDS 器件的高亮状态
-        selected_indices = [item.row() for item in self.list_widget.selectedItems()]
+        selected_indices = [self.list_widget.row(item) for item in self.list_widget.selectedItems()]
         for i, gds in enumerate(self.gds_list):
             if gds.get('patch'):
                 if i in selected_indices:
@@ -786,7 +791,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             self.distribute_selected(mode[-1])
 
     def align_selected(self, mode):
-        selection = [item.row() for item in self.list_widget.selectedItems()]
+        selection = [self.list_widget.row(item) for item in self.list_widget.selectedItems()]
         if len(selection) < 2: return
         self.save_snapshot()
         bboxes = [self.get_bbox(self.gds_list[i]) for i in selection]
@@ -818,7 +823,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         self.on_listbox_select()
 
     def distribute_selected(self, axis):
-        selection = [item.row() for item in self.list_widget.selectedItems()]
+        selection = [self.list_widget.row(item) for item in self.list_widget.selectedItems()]
         if len(selection) < 3: return
         self.save_snapshot()
         items = [{'idx': i, 'gds': self.gds_list[i], 'l': self.get_bbox(self.gds_list[i])[0],
@@ -915,7 +920,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                     t_box.bottom + t_box.top) / 2
 
     def on_listbox_select(self):
-        selection = [item.row() for item in self.list_widget.selectedItems()]
+        selection = [self.list_widget.row(item) for item in self.list_widget.selectedItems()]
         if selection:
             x, y = self.get_anchor_coords(self.gds_list[selection[0]], self.cb_anchor.currentText())
             self.inp_x.setText(f"{x:.3f}");
@@ -927,7 +932,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         self.on_listbox_select()
 
     def apply_manual_position(self):
-        selection = [item.row() for item in self.list_widget.selectedItems()]
+        selection = [self.list_widget.row(item) for item in self.list_widget.selectedItems()]
         if not selection: return
         self.save_snapshot()
         try:
@@ -965,7 +970,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             return
 
         # 3. 如果没选中辅助图形，就走原来的逻辑去删选中的 GDS
-        selection = sorted([item.row() for item in self.list_widget.selectedItems()], reverse=True)
+        selection = sorted([self.list_widget.row(item) for item in self.list_widget.selectedItems()], reverse=True)
         if selection:
             self.save_snapshot()
             self.list_widget.blockSignals(True)
@@ -1260,7 +1265,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 self.rect_start_x, self.rect_start_y = self.gds_list[clicked_idx]['patch'].get_x(), \
                     self.gds_list[clicked_idx]['patch'].get_y()
 
-                current_selection = [item.row() for item in self.list_widget.selectedItems()]
+                current_selection = [self.list_widget.row(item) for item in self.list_widget.selectedItems()]
 
                 self.list_widget.blockSignals(True)
                 try:
@@ -1276,7 +1281,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                     self.list_widget.blockSignals(False)
 
                 self.drag_start_offsets = {idx: (self.gds_list[idx]['offset_x'], self.gds_list[idx]['offset_y']) for idx
-                                           in [item.row() for item in self.list_widget.selectedItems()]}
+                                           in [self.list_widget.row(item) for item in self.list_widget.selectedItems()]}
                 self.on_listbox_select()
                 return
 
@@ -1518,8 +1523,8 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             if best_snap_y is not None: self.guide_lines.append(
                 self.ax.axhline(y=best_snap_y, color='#FF8C00', linestyle='--', linewidth=1.5, zorder=200))
 
-        if [item.row() for item in self.list_widget.selectedItems()] and \
-                [item.row() for item in self.list_widget.selectedItems()][0] == self.dragging_idx:
+        if [self.list_widget.row(item) for item in self.list_widget.selectedItems()] and \
+                [self.list_widget.row(item) for item in self.list_widget.selectedItems()][0] == self.dragging_idx:
             x, y = self.get_anchor_coords(handle_gds, self.cb_anchor.currentText())
             self.inp_x.setText(f"{x:.3f}");
             self.inp_y.setText(f"{y:.3f}")
