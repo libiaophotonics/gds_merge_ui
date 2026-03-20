@@ -448,6 +448,7 @@ class GDSMultiStitcherApp:
         except Exception as e:
             messagebox.showerror("Error", str(e))
 
+    # ================= 属性编辑与绘制对话框 =================
     def edit_text_dialog(self, idx):
         ut = self.user_texts[idx]
         dialog = tk.Toplevel(self.root)
@@ -486,25 +487,42 @@ class GDSMultiStitcherApp:
         s = self.user_shapes[idx]
         dialog = tk.Toplevel(self.root)
         dialog.title(f"Edit {s['type'].capitalize()}")
-        dialog.geometry("260x220")
+        dialog.geometry("260x280")  # 高度加长以适配 Box 属性
         dialog.transient(self.root);
         dialog.grab_set()
 
-        l_var, dt_var, w_var = tk.StringVar(value=str(s['layer'])), tk.StringVar(value=str(s['dt'])), tk.StringVar(
-            value=str(s.get('width', 20.0)))
+        l_var, dt_var = tk.StringVar(value=str(s['layer'])), tk.StringVar(value=str(s['dt']))
         ttk.Label(dialog, text="Layer:").grid(row=0, column=0, padx=15, pady=10, sticky=tk.W);
         ttk.Entry(dialog, textvariable=l_var, width=15).grid(row=0, column=1)
         ttk.Label(dialog, text="Datatype:").grid(row=1, column=0, padx=15, pady=10, sticky=tk.W);
         ttk.Entry(dialog, textvariable=dt_var, width=15).grid(row=1, column=1)
+
+        w_var, box_w_var, box_h_var = tk.StringVar(), tk.StringVar(), tk.StringVar()
+        min_x, min_y = 0, 0
+
         if s['type'] == 'path':
+            w_var.set(str(s.get('width', 20.0)))
             ttk.Label(dialog, text="Width (um):").grid(row=2, column=0, padx=15, pady=10, sticky=tk.W);
             ttk.Entry(dialog, textvariable=w_var, width=15).grid(row=2, column=1)
+        elif s['type'] == 'box':
+            pts = s['points']
+            min_x, min_y = min(pts[0][0], pts[1][0]), min(pts[0][1], pts[1][1])
+            box_w_var.set(str(abs(pts[1][0] - pts[0][0])))
+            box_h_var.set(str(abs(pts[1][1] - pts[0][1])))
+            ttk.Label(dialog, text="Width (um):").grid(row=2, column=0, padx=15, pady=10, sticky=tk.W);
+            ttk.Entry(dialog, textvariable=box_w_var, width=15).grid(row=2, column=1)
+            ttk.Label(dialog, text="Height (um):").grid(row=3, column=0, padx=15, pady=10, sticky=tk.W);
+            ttk.Entry(dialog, textvariable=box_h_var, width=15).grid(row=3, column=1)
 
         def on_ok():
             try:
                 self.save_snapshot()
                 s['layer'], s['dt'] = int(l_var.get()), int(dt_var.get())
-                if s['type'] == 'path': s['width'] = float(w_var.get())
+                if s['type'] == 'path':
+                    s['width'] = float(w_var.get())
+                elif s['type'] == 'box':
+                    nw, nh = float(box_w_var.get()), float(box_h_var.get())
+                    s['points'] = [(min_x, min_y), (min_x + nw, min_y + nh)]
                 self.draw_preview(reset_view=False);
                 dialog.destroy()
             except ValueError:
@@ -590,6 +608,8 @@ class GDSMultiStitcherApp:
             self.temp_draw_preview = None
         self.canvas.draw_idle();
         self.status_var.set("Ready")
+
+    # =========================================================
 
     def open_layer_mapping_dialog(self):
         dialog = tk.Toplevel(self.root)
@@ -995,7 +1015,7 @@ class GDSMultiStitcherApp:
 
         snap_x, snap_y, _, _ = self.get_snapped_coordinate(event.xdata, event.ydata)
 
-        # --- 新增/修改：测量与绘图的 Ortho 判定 ---
+        # --- 测量与绘图的 Ortho 判定 ---
         if (self.measure_mode_var.get() and self.measure_state == 1 and self.measure_start_pt) or \
                 (self.draw_mode in ['polygon', 'path'] and self.draw_points):
 
