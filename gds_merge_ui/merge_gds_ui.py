@@ -245,8 +245,8 @@ class GDSMultiStitcherApp:
 
         seal_f = ttk.LabelFrame(tab_finish, text="2. Seal Ring (划片保护环)", padding=5);
         seal_f.pack(fill=tk.X, pady=(0, 5))
-        ttk.Checkbutton(seal_f, text="Enable Seal Ring", variable=self.enable_seal_var).grid(row=0, column=0,
-                                                                                             columnspan=4, sticky=tk.W)
+        ttk.Checkbutton(seal_f, text="Enable Seal", variable=self.enable_seal_var).grid(row=0, column=0, columnspan=4,
+                                                                                        sticky=tk.W)
         ttk.Label(seal_f, text="Lyr:").grid(row=1, column=0, sticky=tk.W);
         ttk.Entry(seal_f, textvariable=self.seal_layer_var, width=4).grid(row=1, column=1)
         ttk.Label(seal_f, text="DT:").grid(row=1, column=2, sticky=tk.W);
@@ -549,7 +549,7 @@ class GDSMultiStitcherApp:
         s = self.user_shapes[idx]
         dialog = tk.Toplevel(self.root)
         dialog.title(f"Edit {s['type'].capitalize()}")
-        dialog.geometry("260x320")
+        dialog.geometry("260x280")
         dialog.transient(self.root);
         dialog.grab_set()
 
@@ -1061,7 +1061,6 @@ class GDSMultiStitcherApp:
                     self.ax.add_patch(poly);
                     s['patch'] = poly
 
-        # 绘制 Crop Box
         if self.crop_box:
             pts = self.crop_box
             x0, y0 = pts[0];
@@ -1623,7 +1622,8 @@ class GDSMultiStitcherApp:
             if self.enable_seal_var.get():
                 self.status_var.set("Generating Seal Ring...")
                 self.root.update()
-                seal_idx = target_layout.layer(int(self.seal_layer_var.get()), int(self.seal_datatype_var.get()))
+                seal_idx = target_layout.layer(
+                    db.LayerInfo(int(self.seal_layer_var.get()), int(self.seal_datatype_var.get())))
                 s_width_dbu, s_margin_dbu = int(float(self.seal_width_var.get()) / dbu), int(
                     float(self.seal_margin_var.get()) / dbu)
                 w_dbu, h_dbu = int(self.block_width / dbu), int(self.block_height / dbu)
@@ -1637,7 +1637,7 @@ class GDSMultiStitcherApp:
                 self.status_var.set("Generating Custom Shapes & Vias...")
                 self.root.update()
                 for s in self.user_shapes:
-                    lyr_idx = target_layout.layer(s['layer'], s['dt'])
+                    lyr_idx = target_layout.layer(db.LayerInfo(s['layer'], s['dt']))
                     pts = s['points']
                     if s['type'] == 'box':
                         d_box = db.DBox(min(pts[0][0], pts[1][0]), min(pts[0][1], pts[1][1]), max(pts[0][0], pts[1][0]),
@@ -1650,17 +1650,24 @@ class GDSMultiStitcherApp:
                         d_path = db.DPath([db.DPoint(x, y) for x, y in pts], s['width'])
                         merged_top.shapes(lyr_idx).insert(d_path)
                     elif s['type'] == 'via_array':
-                        vw, vh = s['via_w'], s['via_h']
-                        px, py = s['pitch_x'], s['pitch_y']
-                        min_x, min_y = min(pts[0][0], pts[1][0]), min(pts[0][1], pts[1][1])
-                        max_x, max_y = max(pts[0][0], pts[1][0]), max(pts[0][1], pts[1][1])
-                        curr_x = min_x
-                        while curr_x + vw <= max_x + 1e-6:
-                            curr_y = min_y
-                            while curr_y + vh <= max_y + 1e-6:
-                                merged_top.shapes(lyr_idx).insert(db.DBox(curr_x, curr_y, curr_x + vw, curr_y + vh))
-                                curr_y += py
-                            curr_x += px
+                        # 完全重写：使用平铺 Region 写入真实的过孔阵列，100% 避免被 Clip 忽略
+                        vw_dbu, vh_dbu = int(s['via_w'] / dbu), int(s['via_h'] / dbu)
+                        px_dbu, py_dbu = int(s['pitch_x'] / dbu), int(s['pitch_y'] / dbu)
+                        if px_dbu > 0 and py_dbu > 0 and vw_dbu > 0 and vh_dbu > 0:
+                            min_x, min_y = min(pts[0][0], pts[1][0]), min(pts[0][1], pts[1][1])
+                            max_x, max_y = max(pts[0][0], pts[1][0]), max(pts[0][1], pts[1][1])
+                            min_x_dbu, min_y_dbu = int(min_x / dbu), int(min_y / dbu)
+                            max_x_dbu, max_y_dbu = int(max_x / dbu), int(max_y / dbu)
+
+                            via_region = db.Region()
+                            curr_x = min_x_dbu
+                            while curr_x + vw_dbu <= max_x_dbu:
+                                curr_y = min_y_dbu
+                                while curr_y + vh_dbu <= max_y_dbu:
+                                    via_region.insert(db.Box(curr_x, curr_y, curr_x + vw_dbu, curr_y + vh_dbu))
+                                    curr_y += py_dbu
+                                curr_x += px_dbu
+                            merged_top.shapes(lyr_idx).insert(via_region)
 
             # --- 5. 文字 ---
             if self.user_texts:
@@ -1668,11 +1675,12 @@ class GDSMultiStitcherApp:
                 self.root.update()
                 gen = db.TextGenerator.default_generator()
                 for ut in self.user_texts:
-                    lbl_idx = target_layout.layer(ut['layer'], ut['dt'])
+                    lbl_idx = target_layout.layer(db.LayerInfo(ut['layer'], ut['dt']))
                     text_region = gen.text(ut['text'], dbu)
                     if text_region.bbox().height() > 0:
                         text_cell = target_layout.create_cell(f"TEXT_{ut['text']}")
                         text_cell.shapes(lbl_idx).insert(text_region)
+                        _ = text_cell.bbox()  # <--- 强制刷新，防止文本 Cell 被 Clip 引擎丢弃
                         current_h_um = text_region.bbox().height() * dbu
                         scale_factor = ut['size'] / current_h_um if current_h_um > 0 else 1.0
                         t = db.DCplxTrans(scale_factor, 0, False, ut['x'], ut['y'])
@@ -1712,6 +1720,10 @@ class GDSMultiStitcherApp:
             if self.crop_box:
                 self.status_var.set("Clipping to Crop Box...")
                 self.root.update()
+
+                # 强制刷新顶层 BBox 缓存，防止 KLayout Clip 引擎遗漏最新插入的多边形
+                _ = merged_top.bbox()
+
                 pts = self.crop_box
                 min_x, min_y = min(pts[0][0], pts[1][0]), min(pts[0][1], pts[1][1])
                 max_x, max_y = max(pts[0][0], pts[1][0]), max(pts[0][1], pts[1][1])
@@ -1719,14 +1731,13 @@ class GDSMultiStitcherApp:
                 clip_box_dbu = db.Box(int(min_x / dbu), int(min_y / dbu), int(max_x / dbu), int(max_y / dbu))
                 clipped_cell_idx = target_layout.clip(merged_top.cell_index(), clip_box_dbu)
 
-                # 将原来的 target_layout.write(out_p) 替换为只保存最终的 Top Cell
                 merged_top = target_layout.cell(clipped_cell_idx)
                 merged_top.name = self.top_cell_name_var.get() or "MERGED"
 
             self.status_var.set("Writing to disk...")
             self.root.update()
 
-            # --- 确保只导出最终的 Top Cell，抛弃被裁切掉产生的孤立 Cell ---
+            # 使用 SaveLayoutOptions 确保只导出最终的 Top Cell
             save_opt = db.SaveLayoutOptions()
             save_opt.add_cell(merged_top.cell_index())
             target_layout.write(out_p, save_opt)
