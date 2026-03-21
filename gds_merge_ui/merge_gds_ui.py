@@ -1,4 +1,4 @@
-import os, math, json, sys, tempfile
+import os, math, json, sys, tempfile, uuid
 from PyQt5 import QtWidgets, QtCore, QtGui
 import pyqtgraph as pg
 import klayout.db as db
@@ -83,6 +83,10 @@ class GDSViewBox(pg.ViewBox):
 
     def mouseDragEvent(self, ev, axis=None):
         if ev.button() == QtCore.Qt.LeftButton:
+            if self.main_ui.draw_mode in ['polygon', 'path']:
+                ev.ignore()
+                return
+
             pt_curr = self.mapSceneToView(ev.scenePos())
             if ev.isStart():
                 pt_start = self.mapSceneToView(ev.buttonDownScenePos())
@@ -105,7 +109,7 @@ class GDSViewBox(pg.ViewBox):
 class GDSMergerProQt(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("WaferForge GDS Assembler - Professional Edition V3")
+        self.setWindowTitle("WaferForge GDS Assembler - Professional Edition V6")
         self.resize(1400, 850)
         self.setAcceptDrops(True)
 
@@ -116,14 +120,15 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         self.user_texts, self.user_shapes = [], []
         self.undo_stack, self.redo_stack = [], []
         self.guide_lines, self.overlap_patches = [], []
+
         self.crop_box = None
+        self.slot_box = None
+
         self.layer_mapping = {}
         self.workers = []
 
         self.dragging_type, self.dragging_idx = None, -1
         self.active_shape_type, self.active_shape_idx = None, -1
-
-        # ================= 新增边缘拖拽状态 =================
         self.dragging_edge = None
 
         self.drag_start_x = self.drag_start_y = self.rect_start_x = self.rect_start_y = 0
@@ -366,9 +371,14 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         btn_via = QtWidgets.QPushButton("⚄ ViaArray");
         btn_via.clicked.connect(lambda: self.action_add_shape_dialog('via_array'));
         tb2.addWidget(btn_via)
+
         btn_crop = QtWidgets.QPushButton("✂️ Crop");
         btn_crop.clicked.connect(self.action_draw_crop_box);
         tb2.addWidget(btn_crop)
+        btn_slot_tool = QtWidgets.QPushButton("🕳️ Slot");
+        btn_slot_tool.clicked.connect(self.action_draw_slot_box);
+        tb2.addWidget(btn_slot_tool)
+
         btn_clear = QtWidgets.QPushButton("🗑️ Clear");
         btn_clear.clicked.connect(self.action_clear_annotations);
         tb2.addWidget(btn_clear)
@@ -439,7 +449,39 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         btn_prop_apply.setStyleSheet("background-color: #2ca02c; color: white; font-weight: bold;")
         btn_prop_apply.clicked.connect(self.apply_inspector_properties)
         props_layout.addRow(btn_prop_apply)
-        right_layout.addWidget(grp_props, 1)
+        right_layout.addWidget(grp_props, 0)
+
+        grp_slot = QtWidgets.QGroupBox("🧀 Advanced Slotting")
+        slot_layout = QtWidgets.QFormLayout(grp_slot)
+
+        self.slot_layer_inp = QtWidgets.QLineEdit("10/0")
+        h1 = QtWidgets.QHBoxLayout()
+        self.slot_w_inp = QtWidgets.QLineEdit("5.0");
+        self.slot_h_inp = QtWidgets.QLineEdit("10.0")
+        h1.addWidget(self.slot_w_inp);
+        h1.addWidget(QtWidgets.QLabel("x"));
+        h1.addWidget(self.slot_h_inp)
+
+        h2 = QtWidgets.QHBoxLayout()
+        self.slot_px_inp = QtWidgets.QLineEdit("8.0");
+        self.slot_py_inp = QtWidgets.QLineEdit("15.0")
+        h2.addWidget(self.slot_px_inp);
+        h2.addWidget(QtWidgets.QLabel("x"));
+        h2.addWidget(self.slot_py_inp)
+
+        self.slot_margin_inp = QtWidgets.QLineEdit("3.0")
+
+        slot_layout.addRow("Target Layer:", self.slot_layer_inp)
+        slot_layout.addRow("Slot W x H:", h1)
+        slot_layout.addRow("Pitch X x Y:", h2)
+        slot_layout.addRow("Safe Margin:", self.slot_margin_inp)
+
+        btn_slot = QtWidgets.QPushButton("⚡ Execute Slotting")
+        btn_slot.setStyleSheet("background-color: #800080; color: white; font-weight: bold;")
+        btn_slot.clicked.connect(self.action_execute_slotting)
+        slot_layout.addRow(btn_slot)
+
+        right_layout.addWidget(grp_slot, 0)
 
         self.main_splitter.addWidget(left_panel)
         self.main_splitter.addWidget(center_panel)
@@ -448,6 +490,216 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
 
         self.apply_light_theme()
         self.populate_inspector()
+
+    # ================= 动态开槽算法 (终极版：解决层级残留问题) =================
+    def action_execute_slotting(self):
+        if not self.slot_box:
+            QtWidgets.QMessageBox.warning(self, "Warning", "请先使用 '🕳️ Slot' 工具框选开槽区域！")
+            return
+
+        try:
+            target_lyr_text = self.slot_layer_inp.text()
+            tl, tdt = map(int, target_lyr_text.split('/')) if '/' in target_lyr_text else (int(target_lyr_text), 0)
+            sw, sh = float(self.slot_w_inp.text()), float(self.slot_h_inp.text())
+            px, py = float(self.slot_px_inp.text()), float(self.slot_py_inp.text())
+            margin = float(self.slot_margin_inp.text())
+
+            if sw <= 0 or sh <= 0 or px <= 0 or py <= 0:
+                raise ValueError("尺寸或间距必须大于0！")
+
+            self.status_label.setText("正在执行原位内缩开槽算法...")
+            QtWidgets.QApplication.processEvents()
+
+            self.save_snapshot()
+
+            dbu = 0.001
+            if self.gds_list:
+                layout = db.Layout();
+                layout.read(self.gds_list[0]['path']);
+                dbu = layout.dbu
+
+            pts = self.slot_box
+            min_x, min_y = min(pts[0][0], pts[1][0]), min(pts[0][1], pts[1][1])
+            max_x, max_y = max(pts[0][0], pts[1][0]), max(pts[0][1], pts[1][1])
+            slot_region_global = db.Region(
+                db.Box(int(min_x / dbu), int(min_y / dbu), int(max_x / dbu), int(max_y / dbu)))
+
+            modified_any = False
+
+            # 1. 遍历现有的 GDS 并进行原位开槽打孔
+            for i, gds in enumerate(self.gds_list):
+                layout = db.Layout()
+                layout.read(gds['path'])
+                li = layout.find_layer(tl, tdt)
+                if li is None: continue
+
+                top_cell = layout.top_cells()[0]
+
+                # 将全局Slot框映射进GDS自身的局部坐标系
+                dx_dbu = round((gds['trans'].disp.x + gds['offset_x']) / dbu)
+                dy_dbu = round((gds['trans'].disp.y + gds['offset_y']) / dbu)
+                gds_trans = db.Trans(gds['trans'].rot, gds['trans'].is_mirror(), dx_dbu, dy_dbu)
+                inv_trans = gds_trans.inverted()
+
+                slot_region_local = slot_region_global.dup()
+                slot_region_local.transform(inv_trans)
+
+                # 注意：这里会把所有子 Cell 里的金属层全部压平拉出来
+                metal_region = db.Region(top_cell.begin_shapes_rec(li))
+                metal_region.merge()
+
+                target_metal_in_slot = metal_region & slot_region_local
+                if target_metal_in_slot.is_empty(): continue
+
+                safe_region = target_metal_in_slot.dup()
+                safe_region.size(-int(margin / dbu))
+                if safe_region.is_empty(): continue
+
+                slots_region = db.Region()
+                bbox = safe_region.bbox()
+                sw_dbu, sh_dbu = int(sw / dbu), int(sh / dbu)
+                px_dbu, py_dbu = int(px / dbu), int(py / dbu)
+
+                curr_x = bbox.left
+                while curr_x + sw_dbu <= bbox.right:
+                    curr_y = bbox.bottom
+                    while curr_y + sh_dbu <= bbox.top:
+                        slots_region.insert(db.Box(curr_x, curr_y, curr_x + sw_dbu, curr_y + sh_dbu))
+                        curr_y += py_dbu
+                    curr_x += px_dbu
+
+                valid_slots = slots_region & safe_region
+                if valid_slots.is_empty(): continue
+
+                # 原位打孔的核心：用提取出来的完整金属图层减去合法的槽洞
+                final_metal = metal_region - valid_slots
+
+                # ！！！核心修复：必须清除所有层级(Cell)中的该图层，否则子模块的旧实心金属会残留！！！
+                for cell in layout.each_cell():
+                    cell.shapes(li).clear()
+
+                # 将开孔后、扁平化的多边形重新插入到 Top Cell
+                top_cell.shapes(li).insert(final_metal)
+
+                temp_path = os.path.join(tempfile.gettempdir(),
+                                         f"SLOTTED_{uuid.uuid4().hex[:8]}_{os.path.basename(gds['path'])}")
+                layout.write(temp_path)
+
+                # 无缝替换旧 GDS 路径
+                gds['path'] = temp_path
+
+                # 重新计算渲染边界
+                all_layers_region = db.Region()
+                for layer_index in layout.layer_indexes():
+                    all_layers_region.insert(top_cell.begin_shapes_rec(layer_index))
+                all_layers_region.merge()
+                all_layers_region = all_layers_region.hulls()
+
+                trans_complex = db.DCplxTrans(layout.dbu)
+                true_polygons = [[(pt.x, pt.y) for pt in db.DPolygon(poly).transformed(trans_complex).each_point_hull()]
+                                 for poly in all_layers_region.each() if
+                                 list(db.DPolygon(poly).transformed(trans_complex).each_point_hull())]
+                gds['true_polygons'] = true_polygons
+
+                path = QtGui.QPainterPath()
+                if true_polygons:
+                    for poly in true_polygons:
+                        qpoly = QtGui.QPolygonF([QtCore.QPointF(pt[0], pt[1]) for pt in poly])
+                        path.addPolygon(qpoly)
+                gds['qpath'] = path
+
+                modified_any = True
+
+            # 2. 对自绘 Shape 进行处理 (若图层符合要求)
+            shapes_to_remove = []
+            shapes_to_add_as_gds = []
+
+            for i, s in enumerate(self.user_shapes):
+                if s['layer'] == tl and s['dt'] == tdt:
+                    reg = db.Region()
+                    pts = s['points']
+                    if s['type'] == 'box':
+                        smx, smy = min(pts[0][0], pts[1][0]), min(pts[0][1], pts[1][1])
+                        sxx, sxy = max(pts[0][0], pts[1][0]), max(pts[0][1], pts[1][1])
+                        reg.insert(db.Box(int(smx / dbu), int(smy / dbu), int(sxx / dbu), int(sxy / dbu)))
+                    elif s['type'] == 'polygon':
+                        pts_dbu = [db.Point(int(x / dbu), int(y / dbu)) for x, y in pts]
+                        reg.insert(db.Polygon(pts_dbu))
+                    elif s['type'] == 'path':
+                        pts_dbu = [db.Point(int(x / dbu), int(y / dbu)) for x, y in pts]
+                        w_dbu = int(s['width'] / dbu)
+                        reg.insert(db.Path(pts_dbu, w_dbu).polygon())
+                    elif s['type'] == 'via_array':
+                        vw_dbu, vh_dbu = int(s.get('via_w', 1.0) / dbu), int(s.get('via_h', 1.0) / dbu)
+                        px_dbu, py_dbu = int(s.get('pitch_x', 2.0) / dbu), int(s.get('pitch_y', 2.0) / dbu)
+                        if px_dbu > 0 and py_dbu > 0 and vw_dbu > 0 and vh_dbu > 0:
+                            smx, smy = int(min(pts[0][0], pts[1][0]) / dbu), int(min(pts[0][1], pts[1][1]) / dbu)
+                            sxx, sxy = int(max(pts[0][0], pts[1][0]) / dbu), int(max(pts[0][1], pts[1][1]) / dbu)
+                            curr_x = smx
+                            while curr_x + vw_dbu <= sxx:
+                                curr_y = smy
+                                while curr_y + vh_dbu <= sxy:
+                                    reg.insert(db.Box(curr_x, curr_y, curr_x + vw_dbu, curr_y + vh_dbu))
+                                    curr_y += py_dbu
+                                curr_x += px_dbu
+                    reg.merge()
+
+                    target_metal_in_slot = reg & slot_region_global
+                    if target_metal_in_slot.is_empty(): continue
+
+                    safe_region = target_metal_in_slot.dup()
+                    safe_region.size(-int(margin / dbu))
+                    if safe_region.is_empty(): continue
+
+                    slots_region = db.Region()
+                    bbox = safe_region.bbox()
+                    sw_dbu, sh_dbu = int(sw / dbu), int(sh / dbu)
+                    px_dbu, py_dbu = int(px / dbu), int(py / dbu)
+
+                    curr_x = bbox.left
+                    while curr_x + sw_dbu <= bbox.right:
+                        curr_y = bbox.bottom
+                        while curr_y + sh_dbu <= bbox.top:
+                            slots_region.insert(db.Box(curr_x, curr_y, curr_x + sw_dbu, curr_y + sh_dbu))
+                            curr_y += py_dbu
+                        curr_x += px_dbu
+
+                    valid_slots = slots_region & safe_region
+                    if valid_slots.is_empty(): continue
+
+                    final_metal = reg - valid_slots
+                    shapes_to_remove.append(i)
+                    shapes_to_add_as_gds.append(final_metal)
+                    modified_any = True
+
+            for i in sorted(shapes_to_remove, reverse=True):
+                del self.user_shapes[i]
+
+            for final_metal in shapes_to_add_as_gds:
+                temp_path = os.path.join(tempfile.gettempdir(), f"SLOTTED_SHAPE_{uuid.uuid4().hex[:8]}.gds")
+                out_layout = db.Layout()
+                out_layout.dbu = dbu
+                out_top = out_layout.create_cell("SLOTTED_SHAPE")
+                out_li = out_layout.layer(tl, tdt)
+                out_top.shapes(out_li).insert(final_metal)
+                out_layout.write(temp_path)
+                self.process_single_gds(temp_path)
+
+            if modified_any:
+                self.slot_box = None
+                self.active_shape_type = None;
+                self.active_shape_idx = -1
+                self.status_label.setText("原位开槽完成！图形已更新。")
+                self.draw_preview()
+            else:
+                self.undo_stack.pop()
+                self.status_label.setText("Ready")
+                QtWidgets.QMessageBox.information(self, "Info",
+                                                  "未在选定区域找到目标金属，或其宽度无法满足安全边距 (Margin)，开槽终止。")
+
+        except Exception as e:
+            self.status_label.setText("Ready")
+            QtWidgets.QMessageBox.critical(self, "Error", f"开槽失败:\n{str(e)}")
 
     # ================= 一键切换主题 =================
     def on_theme_toggle(self, checked):
@@ -564,6 +816,35 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             self.prop_d_inp.setEnabled(True)
             self.prop_l_inp.setText(str(t['layer']));
             self.prop_d_inp.setText(str(t['dt']))
+
+        elif self.active_shape_type == 'crop' and self.crop_box:
+            self.prop_type_lbl.setText("Crop Area")
+            self.prop_x_inp.setEnabled(True);
+            self.prop_y_inp.setEnabled(True)
+            self.prop_w_inp.setEnabled(True);
+            self.prop_h_inp.setEnabled(True)
+            pts = self.crop_box
+            x0, y0 = min(pts[0][0], pts[1][0]), min(pts[0][1], pts[1][1])
+            w, h = abs(pts[1][0] - pts[0][0]), abs(pts[1][1] - pts[0][1])
+            self.prop_x_inp.setText(f"{x0:.3f}");
+            self.prop_y_inp.setText(f"{y0:.3f}")
+            self.prop_w_inp.setText(f"{w:.3f}");
+            self.prop_h_inp.setText(f"{h:.3f}")
+
+        elif self.active_shape_type == 'slot' and self.slot_box:
+            self.prop_type_lbl.setText("Slot Target Area")
+            self.prop_x_inp.setEnabled(True);
+            self.prop_y_inp.setEnabled(True)
+            self.prop_w_inp.setEnabled(True);
+            self.prop_h_inp.setEnabled(True)
+            pts = self.slot_box
+            x0, y0 = min(pts[0][0], pts[1][0]), min(pts[0][1], pts[1][1])
+            w, h = abs(pts[1][0] - pts[0][0]), abs(pts[1][1] - pts[0][1])
+            self.prop_x_inp.setText(f"{x0:.3f}");
+            self.prop_y_inp.setText(f"{y0:.3f}")
+            self.prop_w_inp.setText(f"{w:.3f}");
+            self.prop_h_inp.setText(f"{h:.3f}")
+
         else:
             self.prop_type_lbl.setText("-")
             self.prop_name_inp.clear();
@@ -619,6 +900,26 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 pass
             self.draw_preview()
 
+        elif self.active_shape_type == 'crop' and self.crop_box:
+            self.save_snapshot()
+            try:
+                nx, ny = float(self.prop_x_inp.text()), float(self.prop_y_inp.text())
+                nw, nh = float(self.prop_w_inp.text()), float(self.prop_h_inp.text())
+                self.crop_box = [(nx, ny), (nx + nw, ny + nh)]
+            except ValueError:
+                pass
+            self.draw_preview()
+
+        elif self.active_shape_type == 'slot' and self.slot_box:
+            self.save_snapshot()
+            try:
+                nx, ny = float(self.prop_x_inp.text()), float(self.prop_y_inp.text())
+                nw, nh = float(self.prop_w_inp.text()), float(self.prop_h_inp.text())
+                self.slot_box = [(nx, ny), (nx + nw, ny + nh)]
+            except ValueError:
+                pass
+            self.draw_preview()
+
     # ================= 极致内存优化的 Undo/Redo 核心 =================
     def create_snapshot_dict(self):
         clean_texts = [{k: v for k, v in t.items() if k != 'text_obj'} for t in self.user_texts]
@@ -628,7 +929,8 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             'measurements': [dict(m) for m in self.measurements],
             'user_texts': clean_texts,
             'user_shapes': clean_shapes,
-            'crop_box': self.crop_box.copy() if self.crop_box else None
+            'crop_box': self.crop_box.copy() if self.crop_box else None,
+            'slot_box': self.slot_box.copy() if self.slot_box else None
         }
         for gds in self.gds_list:
             snap_gds = {
@@ -666,6 +968,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         self.user_texts = snapshot.get('user_texts', [])
         self.user_shapes = snapshot.get('user_shapes', [])
         self.crop_box = snapshot.get('crop_box')
+        self.slot_box = snapshot.get('slot_box')
         self.clear_active_measurement()
         self.draw_preview(reset_view=False)
 
@@ -780,6 +1083,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             project_data = {"block_width": self.block_w, "block_height": self.block_h,
                             "top_cell_name": self.inp_topname.text(), "measurements": self.measurements,
                             "user_texts": clean_texts, "user_shapes": clean_shapes, "crop_box": self.crop_box,
+                            "slot_box": self.slot_box,
                             "layer_mapping": serializable_mapping, "gds_items": []}
             for gds in self.gds_list:
                 item = {"path": gds["path"], "name": gds["name"], "offset_x": gds["offset_x"],
@@ -805,6 +1109,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             self.user_texts = project_data.get("user_texts", [])
             self.user_shapes = project_data.get("user_shapes", [])
             self.crop_box = project_data.get("crop_box")
+            self.slot_box = project_data.get("slot_box")
             saved_mapping = project_data.get("layer_mapping", {})
             self.layer_mapping = {eval(k_str): tuple(v) for k_str, v in saved_mapping.items()}
             self.clear_active_measurement()
@@ -834,37 +1139,9 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         self.update_canvas_selection()
 
     def edit_crop_dialog(self):
-        dlg = QtWidgets.QDialog(self)
-        dlg.setWindowTitle("Edit Crop Box")
-        layout = QtWidgets.QFormLayout(dlg)
-
-        pts = self.crop_box
-        min_x, min_y = min(pts[0][0], pts[1][0]), min(pts[0][1], pts[1][1])
-        max_x, max_y = max(pts[0][0], pts[1][0]), max(pts[0][1], pts[1][1])
-
-        x_var = QtWidgets.QLineEdit(str(min_x));
-        y_var = QtWidgets.QLineEdit(str(min_y))
-        w_var = QtWidgets.QLineEdit(str(max_x - min_x));
-        h_var = QtWidgets.QLineEdit(str(max_y - min_y))
-
-        layout.addRow("X (Bottom-Left):", x_var);
-        layout.addRow("Y (Bottom-Left):", y_var)
-        layout.addRow("Width:", w_var);
-        layout.addRow("Height:", h_var)
-
-        btn = QtWidgets.QPushButton("Update");
-        btn.clicked.connect(dlg.accept)
-        layout.addRow(btn)
-
-        if dlg.exec_():
-            try:
-                self.save_snapshot()
-                nx, ny = float(x_var.text()), float(y_var.text())
-                nw, nh = float(w_var.text()), float(h_var.text())
-                self.crop_box = [(nx, ny), (nx + nw, ny + nh)]
-                self.draw_preview(reset_view=False)
-            except ValueError:
-                pass
+        self.active_shape_type = 'crop';
+        self.active_shape_idx = -1
+        self.update_canvas_selection()
 
     def action_add_text_dialog(self):
         self.cancel_draw_mode()
@@ -937,7 +1214,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 self.draw_points = []
                 self.btn_measure.setChecked(False)
                 self.status_label.setText(
-                    f"{shape_type.capitalize()} Mode active. (拖拽或点击两下绘制Box；单击连线，右键完成Polygon/Path)")
+                    f"{shape_type.capitalize()} Mode active. (拖拽 或 点击 两下绘制Box；单击连线，右键完成Polygon/Path)")
             except ValueError:
                 pass
 
@@ -946,7 +1223,14 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         self.draw_mode = 'crop';
         self.draw_points = []
         self.btn_measure.setChecked(False)
-        self.status_label.setText("Crop Mode: Click top-left, click bottom-right.")
+        self.status_label.setText("Crop Mode: Drag to define crop area.")
+
+    def action_draw_slot_box(self):
+        self.cancel_draw_mode()
+        self.draw_mode = 'slot';
+        self.draw_points = []
+        self.btn_measure.setChecked(False)
+        self.status_label.setText("Slot Mode: Drag to define the slotting target area.")
 
     def cancel_draw_mode(self):
         self.draw_mode = None;
@@ -1002,6 +1286,12 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 self.crop_rect_item.setPen(pg.mkPen('#00FFFF', width=3, style=QtCore.Qt.DashLine))
             else:
                 self.crop_rect_item.setPen(pg.mkPen('r', width=3, style=QtCore.Qt.DashLine))
+
+        if getattr(self, 'slot_rect_item', None):
+            if self.active_shape_type == 'slot':
+                self.slot_rect_item.setPen(pg.mkPen('#FFFFFF', width=3, style=QtCore.Qt.DashLine))
+            else:
+                self.slot_rect_item.setPen(pg.mkPen('#00FFFF', width=3, style=QtCore.Qt.DashLine))
 
         self.populate_inspector()
 
@@ -1231,6 +1521,14 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             self.draw_preview(reset_view=False)
             return
 
+        if getattr(self, 'active_shape_type', None) == 'slot':
+            self.save_snapshot()
+            self.slot_box = None
+            self.active_shape_type = None;
+            self.active_shape_idx = -1
+            self.draw_preview(reset_view=False)
+            return
+
         selection = sorted([self.list_widget.row(item) for item in self.list_widget.selectedItems()], reverse=True)
         if selection:
             self.save_snapshot()
@@ -1405,43 +1703,25 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         else:
             self.crop_rect_item = None
 
+        if self.slot_box:
+            pts = self.slot_box
+            x0, y0 = pts[0];
+            x1, y1 = pts[1]
+            rect = QtWidgets.QGraphicsRectItem(min(x0, x1), min(y0, y1), abs(x1 - x0), abs(y1 - y0))
+            rect.setPen(pg.mkPen('#00FFFF', width=3, style=QtCore.Qt.DashLine))
+            rect.setBrush(pg.mkBrush(0, 255, 255, 20))
+            rect.setZValue(400)
+            self.canvas.addItem(rect)
+            self.slot_rect_item = rect
+        else:
+            self.slot_rect_item = None
+
         self.update_canvas_selection()
         self.draw_overlaps()
 
         if reset_view:
             self.canvas.setXRange(-self.block_w * 0.1, self.block_w * 1.1, padding=0)
             self.canvas.setYRange(-self.block_h * 0.1, self.block_h * 1.1, padding=0)
-
-    # ================= 边缘检测核心算法 =================
-    def check_edge_hit(self, x, y):
-        # 动态计算屏幕像素映射到的物理容差 (吸附边缘的范围)
-        px_x, px_y = self.canvas.plotItem.vb.viewPixelSize()
-        tol_x, tol_y = px_x * 8, px_y * 8
-
-        # 优先检测 Crop 框边缘
-        if self.crop_box and getattr(self, 'active_shape_type', None) == 'crop':
-            edge = self._get_edge(x, y, self.crop_box, tol_x, tol_y)
-            if edge: return 'crop', -1, edge
-
-        # 检测激活的 Box 或 ViaArray 的边缘
-        if getattr(self, 'active_shape_type', None) == 'shape' and self.active_shape_idx != -1:
-            s = self.user_shapes[self.active_shape_idx]
-            if s['type'] in ['box', 'via_array']:
-                edge = self._get_edge(x, y, s['points'], tol_x, tol_y)
-                if edge: return 'shape', self.active_shape_idx, edge
-
-        return None, -1, None
-
-    def _get_edge(self, x, y, pts, tol_x, tol_y):
-        x0, y0 = min(pts[0][0], pts[1][0]), min(pts[0][1], pts[1][1])
-        x1, y1 = max(pts[0][0], pts[1][0]), max(pts[0][1], pts[1][1])
-        if y0 - tol_y <= y <= y1 + tol_y:
-            if abs(x - x0) <= tol_x: return 'left'
-            if abs(x - x1) <= tol_x: return 'right'
-        if x0 - tol_x <= x <= x1 + tol_x:
-            if abs(y - y0) <= tol_y: return 'bottom'
-            if abs(y - y1) <= tol_y: return 'top'
-        return None
 
     def is_hit(self, x, y, item):
         if not item: return False
@@ -1450,8 +1730,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             return item.contains(pt)
         scene_pt = self.canvas.plotItem.vb.mapViewToScene(pt)
         local_pt = item.mapFromScene(scene_pt)
-        if isinstance(item, pg.TextItem):
-            return item.boundingRect().contains(local_pt)
+        if isinstance(item, pg.TextItem): return item.boundingRect().contains(local_pt)
         return item.contains(local_pt)
 
     def get_snapped_coordinate(self, x, y):
@@ -1483,6 +1762,8 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         self.save_snapshot()
         if self.draw_mode == 'crop':
             self.crop_box = list(self.draw_points)
+        elif self.draw_mode == 'slot':
+            self.slot_box = list(self.draw_points)
         else:
             new_shape = self.draw_current_props.copy()
             new_shape['points'] = list(self.draw_points)
@@ -1490,7 +1771,37 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         self.cancel_draw_mode()
         self.draw_preview(reset_view=False)
 
-    # ================== 核心：鼠标事件与边缘拖拽 ==================
+    def check_edge_hit(self, x, y):
+        px_x, px_y = self.canvas.plotItem.vb.viewPixelSize()
+        tol_x, tol_y = px_x * 8, px_y * 8
+
+        if self.crop_box and getattr(self, 'active_shape_type', None) == 'crop':
+            edge = self._get_edge(x, y, self.crop_box, tol_x, tol_y)
+            if edge: return 'crop', -1, edge
+
+        if self.slot_box and getattr(self, 'active_shape_type', None) == 'slot':
+            edge = self._get_edge(x, y, self.slot_box, tol_x, tol_y)
+            if edge: return 'slot', -1, edge
+
+        if getattr(self, 'active_shape_type', None) == 'shape' and self.active_shape_idx != -1:
+            s = self.user_shapes[self.active_shape_idx]
+            if s['type'] in ['box', 'via_array']:
+                edge = self._get_edge(x, y, s['points'], tol_x, tol_y)
+                if edge: return 'shape', self.active_shape_idx, edge
+
+        return None, -1, None
+
+    def _get_edge(self, x, y, pts, tol_x, tol_y):
+        x0, y0 = min(pts[0][0], pts[1][0]), min(pts[0][1], pts[1][1])
+        x1, y1 = max(pts[0][0], pts[1][0]), max(pts[0][1], pts[1][1])
+        if y0 - tol_y <= y <= y1 + tol_y:
+            if abs(x - x0) <= tol_x: return 'left'
+            if abs(x - x1) <= tol_x: return 'right'
+        if x0 - tol_x <= x <= x1 + tol_x:
+            if abs(y - y0) <= tol_y: return 'bottom'
+            if abs(y - y1) <= tol_y: return 'top'
+        return None
+
     def handle_mouse_doubleclick(self, x, y):
         for i in range(len(self.user_texts) - 1, -1, -1):
             if 'text_obj' in self.user_texts[i] and self.is_hit(x, y, self.user_texts[i]['text_obj']):
@@ -1502,7 +1813,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 return
 
         if getattr(self, 'crop_rect_item', None) and self.is_hit(x, y, self.crop_rect_item):
-            self.edit_crop_dialog()
+            self.edit_crop_dialog();
             return
 
         if self.draw_mode in ['polygon', 'path']:
@@ -1533,7 +1844,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             self.cancel_draw_mode()
             self.draw_preview(reset_view=False)
             return
-        elif self.draw_mode in ['box', 'via_array', 'crop']:
+        elif self.draw_mode in ['box', 'via_array', 'crop', 'slot']:
             if not self.draw_points:
                 self.draw_points.append((snap_x, snap_y))
             else:
@@ -1570,12 +1881,11 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
 
     def handle_drag_start(self, x, y):
         snap_x, snap_y, _, _ = self.get_snapped_coordinate(x, y)
-        if self.draw_mode in ['box', 'via_array', 'crop'] and not self.draw_points:
+        if self.draw_mode in ['box', 'via_array', 'crop', 'slot'] and not self.draw_points:
             self.draw_points.append((snap_x, snap_y))
             return
         if self.draw_mode is not None or self.btn_measure.isChecked(): return
 
-        # 拖拽开始时，检测是否捏住了边缘
         hit_type, idx, edge = self.check_edge_hit(x, y)
         if hit_type:
             self.dragging_edge = edge
@@ -1584,6 +1894,8 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             self.drag_start_x, self.drag_start_y = x, y
             if hit_type == 'crop':
                 self.drag_start_offsets = list(self.crop_box)
+            elif hit_type == 'slot':
+                self.drag_start_offsets = list(self.slot_box)
             else:
                 self.drag_start_offsets = list(self.user_shapes[idx]['points'])
             return
@@ -1635,6 +1947,20 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 self.drag_start_offsets = list(self.crop_box)
             return
 
+        if getattr(self, 'slot_rect_item', None) and self.is_hit(x, y, self.slot_rect_item):
+            self.active_shape_type = 'slot';
+            self.active_shape_idx = -1
+            self.list_widget.blockSignals(True);
+            self.list_widget.clearSelection();
+            self.list_widget.blockSignals(False)
+            self.update_canvas_selection()
+            if prepare_drag:
+                self.dragging_type = 'slot';
+                self.dragging_idx = -1
+                self.drag_start_x, self.drag_start_y = x, y
+                self.drag_start_offsets = list(self.slot_box)
+            return
+
         clicked_idx = next(
             (i for i in range(len(self.gds_list) - 1, -1, -1) if self.is_hit(x, y, self.gds_list[i]['patch'])), -1)
         if clicked_idx != -1:
@@ -1680,13 +2006,12 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             elif self.draw_mode in ['polygon', 'path'] and self.draw_points:
                 snap_x, snap_y = self.apply_ortho(snap_x, snap_y, self.draw_points[-1])
 
-        if self.draw_mode in ['box', 'via_array', 'crop'] and len(self.draw_points) == 1:
+        if self.draw_mode in ['box', 'via_array', 'crop', 'slot'] and len(self.draw_points) == 1:
             self.draw_points.append((snap_x, snap_y))
             self.finalize_shape()
             return
 
         if self.dragging_type is not None:
-            # 清除拖拽和边缘缩放状态
             self.dragging_type = None;
             self.dragging_idx = -1;
             self.dragging_edge = None
@@ -1705,7 +2030,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             elif self.draw_mode in ['polygon', 'path'] and self.draw_points:
                 snap_x, snap_y = self.apply_ortho(snap_x, snap_y, self.draw_points[-1])
 
-        # ==== 鼠标悬停显示边缘调节光标 ====
         if self.dragging_type is None and self.draw_mode is None and not self.btn_measure.isChecked():
             hit_type, _, edge = self.check_edge_hit(x, y)
             if edge in ['left', 'right']:
@@ -1727,7 +2051,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                     self.canvas.addItem(self.temp_draw_preview)
                 else:
                     self.temp_draw_preview.setPath(path)
-            elif self.draw_mode in ['box', 'via_array', 'crop'] and len(self.draw_points) == 1:
+            elif self.draw_mode in ['box', 'via_array', 'crop', 'slot'] and len(self.draw_points) == 1:
                 x0, y0 = self.draw_points[0]
                 if not self.temp_draw_preview:
                     self.temp_draw_preview = QtWidgets.QGraphicsRectItem(min(x0, snap_x), min(y0, snap_y),
@@ -1790,7 +2114,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         dx_raw = x - self.drag_start_x
         dy_raw = y - self.drag_start_y
 
-        # ==== 边缘拉伸逻辑 ====
         if self.dragging_edge:
             orig_pts = self.drag_start_offsets
             x0, x1 = min(orig_pts[0][0], orig_pts[1][0]), max(orig_pts[0][0], orig_pts[1][0])
@@ -1811,8 +2134,10 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
 
             if self.dragging_type == 'crop_edge':
                 self.crop_box = new_pts
-                if self.crop_rect_item:
-                    self.crop_rect_item.setRect(min_x, min_y, max_x - min_x, max_y - min_y)
+                if self.crop_rect_item: self.crop_rect_item.setRect(min_x, min_y, max_x - min_x, max_y - min_y)
+            elif self.dragging_type == 'slot_edge':
+                self.slot_box = new_pts
+                if self.slot_rect_item: self.slot_rect_item.setRect(min_x, min_y, max_x - min_x, max_y - min_y)
             elif self.dragging_type == 'shape_edge':
                 s = self.user_shapes[self.dragging_idx]
                 s['points'] = new_pts
@@ -1892,6 +2217,24 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 self.crop_rect_item.setRect(min(x0, x1), min(y0, y1), abs(x1 - x0), abs(y1 - y0))
             return
 
+        if self.dragging_type == 'slot':
+            dx, dy = dx_raw, dy_raw
+            if self.chk_snap.isChecked():
+                try:
+                    g_size = float(self.inp_snap.text())
+                    base_px, base_py = self.drag_start_offsets[0]
+                    nx, ny = round((base_px + dx) / g_size) * g_size, round((base_py + dy) / g_size) * g_size
+                    dx, dy = nx - base_px, ny - base_py
+                except ValueError:
+                    pass
+            new_pts = [(ox + dx, oy + dy) for ox, oy in self.drag_start_offsets]
+            self.slot_box = new_pts
+            if self.slot_rect_item:
+                x0, y0 = new_pts[0];
+                x1, y1 = new_pts[1]
+                self.slot_rect_item.setRect(min(x0, x1), min(y0, y1), abs(x1 - x0), abs(y1 - y0))
+            return
+
         for line in self.guide_lines: self.canvas.removeItem(line)
         self.guide_lines.clear()
 
@@ -1968,14 +2311,13 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 gds['collection'].setTransform(tr)
 
         if not is_grid_snapped:
+            guide_pen = pg.mkPen('#FF8800', width=1.5, style=QtCore.Qt.DashLine)
             if best_snap_x is not None:
-                l = pg.InfiniteLine(pos=best_snap_x, angle=90,
-                                    pen=pg.mkPen('#FF8C00', width=1.5, style=QtCore.Qt.DashLine))
+                l = pg.InfiniteLine(pos=best_snap_x, angle=90, pen=guide_pen)
                 self.canvas.addItem(l);
                 self.guide_lines.append(l)
             if best_snap_y is not None:
-                l = pg.InfiniteLine(pos=best_snap_y, angle=0,
-                                    pen=pg.mkPen('#FF8C00', width=1.5, style=QtCore.Qt.DashLine))
+                l = pg.InfiniteLine(pos=best_snap_y, angle=0, pen=guide_pen)
                 self.canvas.addItem(l);
                 self.guide_lines.append(l)
 
@@ -2011,6 +2353,79 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             self.action_flip_horizontal(idx)
         elif action == a_fv:
             self.action_flip_vertical(idx)
+
+    def action_duplicate(self, idx):
+        self.save_snapshot()
+        o = self.gds_list[idx]
+        self.gds_list.append(
+            {'path': o['path'], 'name': o['name'], 'base_bbox': o['base_bbox'], 'trans': o['trans'] * db.DTrans(),
+             'offset_x': o['offset_x'] + 200, 'offset_y': o['offset_y'] - 200, 'color': o['color'], 'patch': None,
+             'shadow_patch': None, 'collection': None, 'center_text': None, 'true_polygons': o['true_polygons'],
+             'layers': o.get('layers', []), 'qpath': o.get('qpath')})
+        self.list_widget.addItem(f"[{len(self.gds_list)}] {o['name']}")
+        self.draw_preview()
+
+    def action_create_array(self, idx):
+        dlg = QtWidgets.QDialog(self)
+        dlg.setWindowTitle("Create Array")
+        layout = QtWidgets.QFormLayout(dlg)
+        rows_var = QtWidgets.QLineEdit("2")
+        cols_var = QtWidgets.QLineEdit("2")
+        spc_x_var = QtWidgets.QLineEdit("1000")
+        spc_y_var = QtWidgets.QLineEdit("1000")
+        layout.addRow("Rows (Y):", rows_var)
+        layout.addRow("Cols (X):", cols_var)
+        layout.addRow("Space X (um):", spc_x_var)
+        layout.addRow("Space Y (um):", spc_y_var)
+        btn = QtWidgets.QPushButton("Generate Array")
+        btn.clicked.connect(dlg.accept)
+        layout.addRow(btn)
+
+        if dlg.exec_():
+            try:
+                r, c, sx, sy = int(rows_var.text()), int(cols_var.text()), float(spc_x_var.text()), float(
+                    spc_y_var.text())
+                if r < 1 or c < 1: return
+                self.save_snapshot()
+                o = self.gds_list[idx]
+                for i in range(r):
+                    for j in range(c):
+                        if i == 0 and j == 0: continue
+                        self.gds_list.append(
+                            {'path': o['path'], 'name': f"{o['name']}_R{i}C{j}", 'base_bbox': o['base_bbox'],
+                             'trans': o['trans'] * db.DTrans(), 'offset_x': o['offset_x'] + j * sx,
+                             'offset_y': o['offset_y'] + i * sy, 'color': o['color'], 'patch': None,
+                             'shadow_patch': None, 'collection': None,
+                             'center_text': None, 'true_polygons': o['true_polygons'], 'layers': o.get('layers', []),
+                             'qpath': o.get('qpath')})
+                        self.list_widget.addItem(f"[{len(self.gds_list)}] {self.gds_list[-1]['name']}")
+                self.draw_preview()
+            except ValueError:
+                pass
+
+    def action_rotate_ccw(self, i):
+        self.save_snapshot();
+        self.gds_list[i]['trans'] = db.DTrans(1, False, 0, 0) * self.gds_list[i]['trans'];
+        self.draw_preview();
+        self.on_listbox_select()
+
+    def action_rotate_cw(self, i):
+        self.save_snapshot();
+        self.gds_list[i]['trans'] = db.DTrans(3, False, 0, 0) * self.gds_list[i]['trans'];
+        self.draw_preview();
+        self.on_listbox_select()
+
+    def action_flip_horizontal(self, i):
+        self.save_snapshot();
+        self.gds_list[i]['trans'] = db.DTrans(2, True, 0, 0) * self.gds_list[i]['trans'];
+        self.draw_preview();
+        self.on_listbox_select()
+
+    def action_flip_vertical(self, i):
+        self.save_snapshot();
+        self.gds_list[i]['trans'] = db.DTrans(0, True, 0, 0) * self.gds_list[i]['trans'];
+        self.draw_preview();
+        self.on_listbox_select()
 
     # ================= KLayout 核心操作与布尔运算 =================
     def execute_stitch(self):
@@ -2085,22 +2500,21 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                     elif s['type'] == 'path':
                         merged_top.shapes(lyr_idx).insert(db.DPath([db.DPoint(x, y) for x, y in pts], s['width']))
                     elif s['type'] == 'via_array':
-                        vw_dbu, vh_dbu = int(s['via_w'] / dbu), int(s['via_h'] / dbu)
-                        px_dbu, py_dbu = int(s['pitch_x'] / dbu), int(s['pitch_y'] / dbu)
+                        vw_dbu, vh_dbu = int(s.get('via_w', 1.0) / dbu), int(s.get('via_h', 1.0) / dbu)
+                        px_dbu, py_dbu = int(s.get('pitch_x', 2.0) / dbu), int(s.get('pitch_y', 2.0) / dbu)
                         if px_dbu > 0 and py_dbu > 0 and vw_dbu > 0 and vh_dbu > 0:
                             min_x_dbu, min_y_dbu = int(min(pts[0][0], pts[1][0]) / dbu), int(
                                 min(pts[0][1], pts[1][1]) / dbu)
                             max_x_dbu, max_y_dbu = int(max(pts[0][0], pts[1][0]) / dbu), int(
                                 max(pts[0][1], pts[1][1]) / dbu)
-                            via_region = db.Region();
                             curr_x = min_x_dbu
                             while curr_x + vw_dbu <= max_x_dbu:
                                 curr_y = min_y_dbu
                                 while curr_y + vh_dbu <= max_y_dbu:
-                                    via_region.insert(db.Box(curr_x, curr_y, curr_x + vw_dbu, curr_y + vh_dbu))
+                                    merged_top.shapes(lyr_idx).insert(
+                                        db.Box(curr_x, curr_y, curr_x + vw_dbu, curr_y + vh_dbu))
                                     curr_y += py_dbu
                                 curr_x += px_dbu
-                            merged_top.shapes(lyr_idx).insert(via_region)
 
             if self.user_texts:
                 gen = db.TextGenerator.default_generator()
@@ -2293,8 +2707,8 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 w_dbu = int(s['width'] / dbu)
                 reg.insert(db.Path(pts_dbu, w_dbu).polygon())
             elif s['type'] == 'via_array':
-                vw_dbu, vh_dbu = int(s['via_w'] / dbu), int(s['via_h'] / dbu)
-                px_dbu, py_dbu = int(s['pitch_x'] / dbu), int(s['pitch_y'] / dbu)
+                vw_dbu, vh_dbu = int(s.get('via_w', 1.0) / dbu), int(s.get('via_h', 1.0) / dbu)
+                px_dbu, py_dbu = int(s.get('pitch_x', 2.0) / dbu), int(s.get('pitch_y', 2.0) / dbu)
                 if px_dbu > 0 and py_dbu > 0 and vw_dbu > 0 and vh_dbu > 0:
                     min_x_dbu, min_y_dbu = int(min(pts[0][0], pts[1][0]) / dbu), int(min(pts[0][1], pts[1][1]) / dbu)
                     max_x_dbu, max_y_dbu = int(max(pts[0][0], pts[1][0]) / dbu), int(max(pts[0][1], pts[1][1]) / dbu)
@@ -2302,7 +2716,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                     while curr_x + vw_dbu <= max_x_dbu:
                         curr_y = min_y_dbu
                         while curr_y + vh_dbu <= max_y_dbu:
-                            reg.insert(db.Box(curr_x, curr_y, curr_x + vw_dbu, curr_y + vh_dbu));
+                            reg.insert(db.Box(curr_x, curr_y, curr_x + vw_dbu, curr_y + vh_dbu))
                             curr_y += py_dbu
                         curr_x += px_dbu
             reg.merge()
