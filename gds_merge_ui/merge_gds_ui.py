@@ -1,24 +1,13 @@
 import os, math, json, sys, tempfile
 from PyQt5 import QtWidgets, QtCore, QtGui
-import matplotlib
-
-matplotlib.use('Qt5Agg')
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-import matplotlib.patches as patches
-import matplotlib.colors as mcolors
-from matplotlib.textpath import TextPath
-from matplotlib.patches import PathPatch
-from matplotlib.collections import PolyCollection
-import matplotlib.transforms as mtransforms
+import pyqtgraph as pg
 import klayout.db as db
 
-plt.rcParams['font.family'] = ['sans-serif']
-plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans', 'Arial', 'Microsoft YaHei']
-plt.rcParams['axes.unicode_minus'] = False
+# 开启 PyQtGraph 抗锯齿以获得极致的图形渲染质量
+pg.setConfigOptions(antialias=True)
 
 
-# ================= 新增：后台多线程加载 Worker =================
+# ================= 后台多线程加载 Worker =================
 class GDSLoadWorker(QtCore.QThread):
     result_ready = QtCore.pyqtSignal(dict)
     error_occurred = QtCore.pyqtSignal(str, str)
@@ -47,7 +36,6 @@ class GDSLoadWorker(QtCore.QThread):
 
             result = {
                 'filepath': self.filepath,
-                # 拆解 bbox 以避免 C++ 对象跨线程被垃圾回收销毁的风险
                 'bbox_left': base_bbox.left, 'bbox_bottom': base_bbox.bottom,
                 'bbox_right': base_bbox.right, 'bbox_top': base_bbox.top,
                 'true_polygons': true_polygons,
@@ -59,13 +47,69 @@ class GDSLoadWorker(QtCore.QThread):
             self.error_occurred.emit(self.filepath, traceback.format_exc())
 
 
-# ==============================================================
+# ================= 自定义高交互 ViewBox =================
+class GDSViewBox(pg.ViewBox):
+    def __init__(self, main_ui, *args, **kw):
+        super().__init__(*args, **kw)
+        self.main_ui = main_ui
+
+    def mouseClickEvent(self, ev):
+        pt = self.mapSceneToView(ev.scenePos())
+
+        if ev.button() == QtCore.Qt.RightButton:
+            if self.main_ui.draw_mode in ['polygon', 'path']:
+                if len(self.main_ui.draw_points) >= (3 if self.main_ui.draw_mode == 'polygon' else 2):
+                    self.main_ui.finalize_shape()
+                else:
+                    self.main_ui.cancel_draw_mode()
+                ev.accept()
+            else:
+                self.main_ui.handle_mouse_click(pt.x(), pt.y(), is_double=False, button=ev.button())
+                ev.accept()
+            return
+
+        if ev.button() == QtCore.Qt.LeftButton:
+            if not ev.double():
+                self.main_ui.handle_mouse_click(pt.x(), pt.y(), is_double=False, button=ev.button())
+            ev.accept()
+        else:
+            super().mouseClickEvent(ev)
+
+    def mouseDoubleClickEvent(self, ev):
+        if ev.button() == QtCore.Qt.LeftButton:
+            ev.accept()
+            pt = self.mapSceneToView(ev.scenePos())
+            self.main_ui.handle_mouse_doubleclick(pt.x(), pt.y())
+        else:
+            super().mouseDoubleClickEvent(ev)
+
+    def mouseDragEvent(self, ev, axis=None):
+        if ev.button() == QtCore.Qt.LeftButton:
+            pt_curr = self.mapSceneToView(ev.scenePos())
+            if ev.isStart():
+                pt_start = self.mapSceneToView(ev.buttonDownScenePos())
+                self.main_ui.handle_drag_start(pt_start.x(), pt_start.y())
+
+            if not ev.isStart() and not ev.isFinish():
+                self.main_ui.handle_mouse_move(pt_curr.x(), pt_curr.y())
+
+            if ev.isFinish():
+                self.main_ui.handle_drag_finish(pt_curr.x(), pt_curr.y())
+            ev.accept()
+        else:
+            super().mouseDragEvent(ev, axis)
+
+    def hoverEvent(self, ev):
+        if ev.isExit(): return
+        pt = self.mapSceneToView(ev.scenePos())
+        self.main_ui.handle_mouse_move(pt.x(), pt.y())
 
 
+# ================= 主程序 =================
 class GDSMergerProQt(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("GDS MERGER Pro - Advanced Mask Prep Tool (PyQt5 Edition)")
+        self.setWindowTitle("GDS MERGER Pro - Advanced Mask Prep Tool (PyQtGraph 终极完全版)")
         self.resize(1300, 800)
         self.setAcceptDrops(True)
 
@@ -74,11 +118,10 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         self.crop_box = None
         self.layer_mapping = {}
 
-        self.workers = []  # 存放后台加载线程的池子
+        self.workers = []
 
         self.dragging_type, self.dragging_idx = None, -1
         self.active_shape_type, self.active_shape_idx = None, -1
-
         self.drag_start_x = self.drag_start_y = self.rect_start_x = self.rect_start_y = 0
         self.drag_start_offsets = {}
         self.drag_snapshot_taken = False
@@ -87,7 +130,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         self.measure_state = 0
 
         self.draw_mode, self.draw_points, self.draw_current_props, self.temp_draw_preview = None, [], {}, None
-        self.ctrl_pressed, self.last_mouse_event = False, None
+        self.ctrl_pressed = False
 
         self.block_w, self.block_h = 5000.0, 5000.0
         self.top_cell_name = "MERGED_CHIP"
@@ -97,19 +140,17 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         self.setup_ui()
         self.draw_preview(reset_view=True)
 
-    def on_key_press(self, event):
-        if event.key in ['control', 'ctrl']:
+    def keyPressEvent(self, event):
+        if event.key() in [QtCore.Qt.Key_Control, QtCore.Qt.Key_Meta]:
             self.ctrl_pressed = True
-            if self.last_mouse_event and getattr(self.last_mouse_event, 'inaxes', False):
-                self.on_motion(self.last_mouse_event)
-        elif event.key in ['delete', 'backspace']:
+        elif event.key() in [QtCore.Qt.Key_Delete, QtCore.Qt.Key_Backspace]:
             self.action_delete_selected()
+        super().keyPressEvent(event)
 
-    def on_key_release(self, event):
-        if event.key in ['control', 'ctrl']:
+    def keyReleaseEvent(self, event):
+        if event.key() in [QtCore.Qt.Key_Control, QtCore.Qt.Key_Meta]:
             self.ctrl_pressed = False
-            if self.last_mouse_event and getattr(self.last_mouse_event, 'inaxes', False):
-                self.on_motion(self.last_mouse_event)
+        super().keyReleaseEvent(event)
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
@@ -272,7 +313,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         btn_undo.clicked.connect(self.action_undo)
         tb1.addWidget(btn_undo)
         btn_fit = QtWidgets.QPushButton("🔍 Fit")
-        btn_fit.clicked.connect(lambda: self.draw_preview(reset_view=True))
+        btn_fit.clicked.connect(lambda: self.canvas.autoRange())
         tb1.addWidget(btn_fit)
         self.btn_measure = QtWidgets.QPushButton("📏 Measure")
         self.btn_measure.setCheckable(True)
@@ -335,21 +376,22 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         tb2.addStretch()
         center_layout.addLayout(tb2)
 
-        self.figure = plt.Figure(figsize=(6, 5), dpi=100)
-        self.figure.patch.set_facecolor('#2b2b2b')
-        self.ax = self.figure.add_subplot(111)
-        self.ax.set_facecolor('#1e1e1e')
-        self.canvas = FigureCanvas(self.figure)
-        self.canvas.setFocusPolicy(QtCore.Qt.StrongFocus)
+        # ================== 核心：PyQtGraph 画布控件 ==================
+        view_box = GDSViewBox(self)
+        self.canvas = pg.PlotWidget(viewBox=view_box)
+        self.canvas.setBackground('#1e1e1e')
+        self.canvas.showGrid(x=True, y=True, alpha=0.4)
+        self.canvas.setAspectLocked(True)
         self.canvas.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
-        center_layout.addWidget(self.canvas, 1)
 
-        self.canvas.mpl_connect('button_press_event', self.on_press)
-        self.canvas.mpl_connect('motion_notify_event', self.on_motion)
-        self.canvas.mpl_connect('button_release_event', self.on_release)
-        self.canvas.mpl_connect('scroll_event', self.on_scroll)
-        self.canvas.mpl_connect('key_press_event', self.on_key_press)
-        self.canvas.mpl_connect('key_release_event', self.on_key_release)
+        ax_left = self.canvas.getAxis('left')
+        ax_bottom = self.canvas.getAxis('bottom')
+        ax_left.setPen(pg.mkPen('#555555'));
+        ax_left.setTextPen(pg.mkPen('#aaaaaa'))
+        ax_bottom.setPen(pg.mkPen('#555555'));
+        ax_bottom.setTextPen(pg.mkPen('#aaaaaa'))
+
+        center_layout.addWidget(self.canvas, 1)
 
         self.status_label = QtWidgets.QLabel("Ready: You can drag and drop GDS files here.")
         center_layout.addWidget(self.status_label)
@@ -378,23 +420,18 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         for gds in self.gds_list: global_layers.update(gds.get('layers', []))
         for l, d in sorted(list(global_layers)): self.layer_list.addItem(f"{l}/{d}")
 
-    # ================= 修改为使用 QThread 异步加载 =================
     def process_single_gds(self, filepath):
-        # 提示用户正在后台加载，并且不会阻塞 UI
         self.status_label.setText(f"⏳ 正在后台极速解析: {os.path.basename(filepath)} ...")
         QtWidgets.QApplication.processEvents()
 
-        # 创建后台线程 Worker
         worker = GDSLoadWorker(filepath)
         worker.result_ready.connect(self.on_gds_loaded)
         worker.error_occurred.connect(self.on_gds_load_error)
 
-        # 保持引用，防止线程被垃圾回收
         self.workers.append(worker)
         worker.start()
 
     def on_gds_loaded(self, result):
-        # 线程结束后的回调清理
         worker = self.sender()
         if worker in self.workers:
             self.workers.remove(worker)
@@ -430,22 +467,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         self.status_label.setText("Ready (加载失败)")
         QtWidgets.QMessageBox.critical(self, "Error", f"Failed to load {filepath}:\n{error_msg}")
 
-    # 对于原有的 parse_gds_info，为了兼容工程文件加载，依然保留它
-    def parse_gds_info(self, filepath):
-        layout = db.Layout()
-        layout.read(filepath)
-        top_cell = layout.top_cells()[0]
-        base_bbox = top_cell.dbbox()
-        layers = [(layout.get_info(li).layer, layout.get_info(li).datatype) for li in layout.layer_indexes()]
-        region = db.Region()
-        for li in layout.layer_indexes(): region.insert(top_cell.begin_shapes_rec(li))
-        region.merge()
-        region = region.hulls()
-        trans = db.DCplxTrans(layout.dbu)
-        true_polygons = [[(pt.x, pt.y) for pt in db.DPolygon(poly).transformed(trans).each_point_hull()] for poly in
-                         region.each() if list(db.DPolygon(poly).transformed(trans).each_point_hull())]
-        return base_bbox, true_polygons, layers
-
     def add_gds(self):
         paths, _ = QtWidgets.QFileDialog.getOpenFileNames(self, "Open GDS", "", "GDS Files (*.gds)")
         for p in paths:
@@ -458,12 +479,11 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
     def on_overlap_toggle(self):
         self.btn_overlap.setText("🔴 Overlaps (ON)" if self.btn_overlap.isChecked() else "⭕ Overlaps (OFF)")
         self.draw_overlaps()
-        self.canvas.draw_idle()
 
     def draw_overlaps(self):
         for p in getattr(self, 'overlap_patches', []):
             try:
-                p.remove()
+                self.canvas.removeItem(p)
             except:
                 pass
         self.overlap_patches.clear()
@@ -476,10 +496,13 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 l2, r2, b2, t2 = self.get_bbox(self.gds_list[j])
                 if (l1 < r2 - tol) and (r1 > l2 + tol) and (b1 < t2 - tol) and (t1 > b2 + tol):
                     il, ir, ib, it = max(l1, l2), min(r1, r2), max(b1, b2), min(t1, t2)
-                    rect = patches.Rectangle((il, ib), ir - il, it - ib, linewidth=1.5, edgecolor='red',
-                                             facecolor='red', alpha=0.5, hatch='///', zorder=250)
-                    self.ax.add_patch(rect)
-                    self.overlap_patches.append(rect)
+                    rect_item = QtWidgets.QGraphicsRectItem(il, ib, ir - il, it - ib)
+                    brush = QtGui.QBrush(QtGui.QColor(255, 0, 0, 150), QtCore.Qt.FDiagPattern)
+                    rect_item.setBrush(brush)
+                    rect_item.setPen(pg.mkPen('r', width=2))
+                    rect_item.setZValue(250)
+                    self.canvas.addItem(rect_item)
+                    self.overlap_patches.append(rect_item)
 
     def save_snapshot(self):
         clean_texts = [{k: v for k, v in t.items() if k != 'text_obj'} for t in self.user_texts]
@@ -500,7 +523,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         snapshot = self.undo_stack.pop()
         self.gds_list.clear()
         self.list_widget.clear()
-
         self.active_shape_type = None
         self.active_shape_idx = -1
 
@@ -568,17 +590,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             for i, item in enumerate(project_data.get("gds_items", [])):
                 path, name = item.get("path"), item.get("name")
                 if not os.path.exists(path): continue
-                # 加载工程时直接使用原来的同步加载
-                base_bbox, true_polygons, layers = self.parse_gds_info(path)
-                trans = db.DTrans(item["trans_rot"], item["trans_mirror"], item["trans_dx"], item["trans_dy"])
-                gds_info = {'path': path, 'name': name, 'base_bbox': base_bbox, 'trans': trans,
-                            'offset_x': item["offset_x"], 'offset_y': item["offset_y"], 'color': item["color"],
-                            'patch': None, 'shadow_patch': None, 'collection': None, 'center_text': None,
-                            'true_polygons': true_polygons, 'layers': layers}
-                self.gds_list.append(gds_info)
-                self.list_widget.addItem(f"[{i + 1}] {name}")
-            self.refresh_layer_list()
-            self.draw_preview(reset_view=True)
+                self.process_single_gds(path)
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Error", str(e))
 
@@ -603,9 +615,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 self.save_snapshot()
                 ut['text'], ut['size'], ut['layer'], ut['dt'] = t_var.text(), float(s_var.text()), int(
                     l_var.text()), int(dt_var.text())
-                tp = TextPath((ut['x'], ut['y']), ut['text'], size=ut['size'])
-                ut['text_obj'].set_path(tp)
-                self.canvas.draw_idle()
+                self.draw_preview(reset_view=False)
             except ValueError:
                 pass
 
@@ -669,6 +679,39 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             except ValueError:
                 pass
 
+    def edit_crop_dialog(self):
+        dlg = QtWidgets.QDialog(self)
+        dlg.setWindowTitle("Edit Crop Box")
+        layout = QtWidgets.QFormLayout(dlg)
+
+        pts = self.crop_box
+        min_x, min_y = min(pts[0][0], pts[1][0]), min(pts[0][1], pts[1][1])
+        max_x, max_y = max(pts[0][0], pts[1][0]), max(pts[0][1], pts[1][1])
+
+        x_var = QtWidgets.QLineEdit(str(min_x))
+        y_var = QtWidgets.QLineEdit(str(min_y))
+        w_var = QtWidgets.QLineEdit(str(max_x - min_x))
+        h_var = QtWidgets.QLineEdit(str(max_y - min_y))
+
+        layout.addRow("X (Bottom-Left):", x_var)
+        layout.addRow("Y (Bottom-Left):", y_var)
+        layout.addRow("Width:", w_var)
+        layout.addRow("Height:", h_var)
+
+        btn = QtWidgets.QPushButton("Update")
+        btn.clicked.connect(dlg.accept)
+        layout.addRow(btn)
+
+        if dlg.exec_():
+            try:
+                self.save_snapshot()
+                nx, ny = float(x_var.text()), float(y_var.text())
+                nw, nh = float(w_var.text()), float(h_var.text())
+                self.crop_box = [(nx, ny), (nx + nw, ny + nh)]
+                self.draw_preview(reset_view=False)
+            except ValueError:
+                pass
+
     def action_add_text_dialog(self):
         self.cancel_draw_mode()
         dlg = QtWidgets.QDialog(self)
@@ -679,7 +722,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         l_var = QtWidgets.QLineEdit("10")
         dt_var = QtWidgets.QLineEdit("0")
         layout.addRow("Text:", t_var)
-        layout.addRow("Size:", s_var)
+        layout.addRow("Size (um):", s_var)
         layout.addRow("Layer:", l_var)
         layout.addRow("DT:", dt_var)
         btn = QtWidgets.QPushButton("Place on Canvas")
@@ -692,7 +735,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 self.draw_mode = 'text'
                 self.btn_measure.setChecked(False)
                 self.status_label.setText("Text Mode: Click on Canvas to place.")
-                self.canvas.setFocus()
             except ValueError:
                 pass
 
@@ -707,21 +749,21 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         layout.addRow("DT:", dt_var)
 
         w_var = QtWidgets.QLineEdit("20.0")
-        vw_var = QtWidgets.QLineEdit("1.0")
+        vw_var = QtWidgets.QLineEdit("1.0");
         vh_var = QtWidgets.QLineEdit("1.0")
-        px_var = QtWidgets.QLineEdit("2.0")
+        px_var = QtWidgets.QLineEdit("2.0");
         py_var = QtWidgets.QLineEdit("2.0")
 
         if shape_type == 'path':
             layout.addRow("Width:", w_var)
         elif shape_type == 'via_array':
-            h1 = QtWidgets.QHBoxLayout()
-            h1.addWidget(vw_var)
-            h1.addWidget(vh_var)
+            h1 = QtWidgets.QHBoxLayout();
+            h1.addWidget(vw_var);
+            h1.addWidget(vh_var);
             layout.addRow("Via WxH:", h1)
-            h2 = QtWidgets.QHBoxLayout()
-            h2.addWidget(px_var)
-            h2.addWidget(py_var)
+            h2 = QtWidgets.QHBoxLayout();
+            h2.addWidget(px_var);
+            h2.addWidget(py_var);
             layout.addRow("Pitch XxY:", h2)
 
         btn = QtWidgets.QPushButton("Start Drawing")
@@ -737,32 +779,30 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                         {'via_w': float(vw_var.text()), 'via_h': float(vh_var.text()), 'pitch_x': float(px_var.text()),
                          'pitch_y': float(py_var.text())})
 
-                self.draw_mode = shape_type
+                self.draw_mode = shape_type;
                 self.draw_points = []
                 self.btn_measure.setChecked(False)
-                self.status_label.setText(f"{shape_type.capitalize()} Mode active. (Hold Ctrl for Ortho)")
-                self.canvas.setFocus()
+                self.status_label.setText(
+                    f"{shape_type.capitalize()} Mode active. (拖拽 或 点击 两下绘制Box；单击连线，右键完成Polygon/Path)")
             except ValueError:
                 pass
 
     def action_draw_crop_box(self):
         self.cancel_draw_mode()
-        self.draw_mode = 'crop'
+        self.draw_mode = 'crop';
         self.draw_points = []
         self.btn_measure.setChecked(False)
         self.status_label.setText("Crop Mode: Click top-left, click bottom-right.")
-        self.canvas.setFocus()
 
     def cancel_draw_mode(self):
-        self.draw_mode = None
+        self.draw_mode = None;
         self.draw_points = []
         if self.temp_draw_preview:
             try:
-                self.temp_draw_preview.remove()
+                self.canvas.removeItem(self.temp_draw_preview)
             except:
                 pass
             self.temp_draw_preview = None
-        self.canvas.draw_idle()
         self.status_label.setText("Ready")
 
     def update_canvas_selection(self):
@@ -770,50 +810,40 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         for i, gds in enumerate(self.gds_list):
             if gds.get('patch'):
                 if i in selected_indices:
-                    if 'shadow_patch' in gds and gds['shadow_patch']:
-                        gds['shadow_patch'].set_alpha(0.6)
-                    gds['patch'].set_alpha(0.8)
-                    gds['patch'].set_linewidth(3.0)
-                    gds['patch'].set_edgecolor('#00FFFF')
-                    gds['patch'].set_hatch('///')
-                    if gds.get('collection'):
-                        gds['collection'].set_edgecolor('#00FFFF')
-                        gds['collection'].set_linewidth(1.5)
+                    if 'shadow_patch' in gds and gds['shadow_patch']: gds['shadow_patch'].setOpacity(0.6)
+
+                    shadow = QtWidgets.QGraphicsDropShadowEffect()
+                    shadow.setBlurRadius(15);
+                    shadow.setColor(QtGui.QColor('#00FFFF'));
+                    shadow.setOffset(0, 0)
+                    gds['patch'].setGraphicsEffect(shadow)
+
+                    gds['patch'].setBrush(pg.mkBrush(QtGui.QColor(gds['color']).lighter(130).name() + '80'))
+                    gds['patch'].setPen(pg.mkPen('#00FFFF', width=3))
+                    if gds.get('collection'): gds['collection'].setPen(pg.mkPen('#00FFFF', width=2))
                 else:
-                    if 'shadow_patch' in gds and gds['shadow_patch']:
-                        gds['shadow_patch'].set_alpha(0.0)
-                    gds['patch'].set_alpha(0.3)
-                    gds['patch'].set_linewidth(1.0)
-                    gds['patch'].set_edgecolor(gds['color'])
-                    gds['patch'].set_hatch(None)
-                    if gds.get('collection'):
-                        gds['collection'].set_edgecolor(mcolors.to_rgba(gds['color'], alpha=0.9))
-                        gds['collection'].set_linewidth(0.5)
+                    if 'shadow_patch' in gds and gds['shadow_patch']: gds['shadow_patch'].setOpacity(0.0)
+                    gds['patch'].setGraphicsEffect(None)
+                    gds['patch'].setBrush(pg.mkBrush(gds['color'] + '60'))
+                    gds['patch'].setPen(pg.mkPen(gds['color'], width=1))
+                    if gds.get('collection'): gds['collection'].setPen(pg.mkPen(gds['color'] + 'E0', width=1))
 
         for i, ut in enumerate(self.user_texts):
             if 'text_obj' in ut and ut['text_obj']:
                 if getattr(self, 'active_shape_type', None) == 'text' and getattr(self, 'active_shape_idx', -1) == i:
-                    ut['text_obj'].set_edgecolor('white')
-                    ut['text_obj'].set_linewidth(1.5)
+                    ut['text_obj'].setBrush(pg.mkBrush('#FFFFFF'))
                 else:
-                    ut['text_obj'].set_edgecolor('none')
-                    ut['text_obj'].set_linewidth(0)
+                    ut['text_obj'].setBrush(pg.mkBrush('#00CED1'))
 
         for i, s in enumerate(self.user_shapes):
             if 'patch' in s and s['patch']:
                 if getattr(self, 'active_shape_type', None) == 'shape' and getattr(self, 'active_shape_idx', -1) == i:
-                    s['patch'].set_edgecolor('white')
-                    s['patch'].set_linewidth(3.0)
-                    s['patch'].set_linestyle('--')
+                    s['patch'].setPen(pg.mkPen('w', width=3, style=QtCore.Qt.DashLine))
                 else:
                     ec = '#FF8C00' if s['type'] == 'box' else '#00CED1'
                     if s['type'] == 'polygon': ec = '#32CD32'
                     if s['type'] == 'path': ec = '#9370DB'
-                    s['patch'].set_edgecolor(ec)
-                    s['patch'].set_linewidth(2 if s['type'] in ['box', 'via_array'] else 1)
-                    s['patch'].set_linestyle('-')
-
-        self.canvas.draw_idle()
+                    s['patch'].setPen(pg.mkPen(ec, width=2 if s['type'] in ['box', 'via_array'] else 1))
 
     def open_layer_mapping_dialog(self):
         dlg = QtWidgets.QDialog(self)
@@ -844,8 +874,8 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                     pass
             dlg.accept()
 
-        btn = QtWidgets.QPushButton("Save Mapping")
-        btn.clicked.connect(save_mapping)
+        btn = QtWidgets.QPushButton("Save Mapping");
+        btn.clicked.connect(save_mapping);
         layout.addWidget(btn)
         dlg.exec_()
 
@@ -880,7 +910,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         elif mode == 'center_x':
             target = (min(b[0] for b in bboxes) + max(b[1] for b in bboxes)) / 2
             for i in selection: self.set_anchor_coords(self.gds_list[i], 'Center', target, (
-                    self.get_bbox(self.gds_list[i])[2] + self.get_bbox(self.gds_list[i])[3]) / 2)
+                        self.get_bbox(self.gds_list[i])[2] + self.get_bbox(self.gds_list[i])[3]) / 2)
         elif mode == 'bottom':
             target = min(b[2] for b in bboxes)
             for i in selection: self.set_anchor_coords(self.gds_list[i], 'Bottom-Left',
@@ -892,7 +922,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         elif mode == 'center_y':
             target = (min(b[2] for b in bboxes) + max(b[3] for b in bboxes)) / 2
             for i in selection: self.set_anchor_coords(self.gds_list[i], 'Center', (
-                    self.get_bbox(self.gds_list[i])[0] + self.get_bbox(self.gds_list[i])[1]) / 2, target)
+                        self.get_bbox(self.gds_list[i])[0] + self.get_bbox(self.gds_list[i])[1]) / 2, target)
         self.draw_preview(reset_view=False)
         self.on_listbox_select()
 
@@ -927,34 +957,31 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             self.list_widget.clearSelection()
             self.list_widget.blockSignals(False)
             self.update_canvas_selection()
-            self.canvas.setFocus()
         else:
             self.status_label.setText("Measure Mode OFF.")
             self.clear_active_measurement()
-            self.canvas.draw_idle()
 
     def action_clear_annotations(self):
         self.save_snapshot()
         self.measurements.clear()
-        self.user_texts.clear()
-        self.user_shapes.clear()
         self.crop_box = None
         self.clear_active_measurement()
         self.active_shape_type = None
         self.active_shape_idx = -1
+        self.btn_measure.setChecked(False)
         self.draw_preview(reset_view=False)
 
     def clear_active_measurement(self):
         for item in [self.measure_line, self.measure_text, self.snap_indicator, self.temp_draw_preview]:
             if item:
                 try:
-                    item.remove()
+                    self.canvas.removeItem(item)
                 except:
                     pass
         self.measure_line = self.measure_text = self.snap_indicator = self.temp_draw_preview = None
         for line in self.guide_lines:
             try:
-                line.remove()
+                self.canvas.removeItem(line)
             except:
                 pass
         self.guide_lines.clear()
@@ -988,13 +1015,13 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             gds['offset_x'], gds['offset_y'] = target_x - t_box.right, target_y - t_box.top
         elif anchor_type == "Center":
             gds['offset_x'], gds['offset_y'] = target_x - (t_box.left + t_box.right) / 2, target_y - (
-                    t_box.bottom + t_box.top) / 2
+                        t_box.bottom + t_box.top) / 2
 
     def on_listbox_select(self):
         selection = [self.list_widget.row(item) for item in self.list_widget.selectedItems()]
         if selection:
             x, y = self.get_anchor_coords(self.gds_list[selection[0]], self.cb_anchor.currentText())
-            self.inp_x.setText(f"{x:.3f}")
+            self.inp_x.setText(f"{x:.3f}");
             self.inp_y.setText(f"{y:.3f}")
             if self.btn_measure.isChecked(): self.btn_measure.setChecked(False)
         self.update_canvas_selection()
@@ -1024,7 +1051,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         if getattr(self, 'active_shape_type', None) == 'text' and self.active_shape_idx != -1:
             self.save_snapshot()
             del self.user_texts[self.active_shape_idx]
-            self.active_shape_type = None
+            self.active_shape_type = None;
             self.active_shape_idx = -1
             self.draw_preview(reset_view=False)
             return
@@ -1032,7 +1059,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         if getattr(self, 'active_shape_type', None) == 'shape' and self.active_shape_idx != -1:
             self.save_snapshot()
             del self.user_shapes[self.active_shape_idx]
-            self.active_shape_type = None
+            self.active_shape_type = None;
             self.active_shape_idx = -1
             self.draw_preview(reset_view=False)
             return
@@ -1046,28 +1073,43 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 self.list_widget.takeItem(idx)
             self.list_widget.clearSelection()
             self.list_widget.blockSignals(False)
-
             self.refresh_layer_list()
-            self.inp_x.setText("0.0")
+            self.inp_x.setText("0.0");
             self.inp_y.setText("0.0")
             self.draw_preview(reset_view=False)
 
+    # ================= 核心：生成物理大小一致的矢量文字 =================
+    def create_text_path(self, text_str, size, x, y):
+        path = QtGui.QPainterPath()
+        font = QtGui.QFont("Arial")
+        font.setPixelSize(100)
+        path.addText(0, 0, font, text_str)
+        br = path.boundingRect()
+        scale = size / br.height() if br.height() > 0 else 1.0
+
+        tr = QtGui.QTransform()
+        tr.translate(x, y)
+        tr.scale(scale, -scale)
+        tr.translate(-br.left(), -br.bottom())
+        return tr.map(path)
+
+    # ================== 核心：PyQtGraph 的画图逻辑 ==================
     def draw_preview(self, reset_view=False):
-        cur_xlim, cur_ylim = self.ax.get_xlim(), self.ax.get_ylim()
-        self.ax.clear()
+        self.canvas.clear()
         self.clear_active_measurement()
 
-        for spine in self.ax.spines.values(): spine.set_visible(False)
-        self.ax.tick_params(axis='both', which='both', length=4, width=0.8, direction='out', colors='#555555',
-                            labelcolor='#aaaaaa')
-        self.ax.set_axisbelow(True)
+        bg_rect = QtWidgets.QGraphicsRectItem(0, 0, self.block_w, self.block_h)
+        bg_rect.setPen(pg.mkPen('#555555', width=2, style=QtCore.Qt.DashLine))
+        bg_rect.setBrush(pg.mkBrush(25, 25, 25, 150))
+        self.canvas.addItem(bg_rect)
 
-        self.ax.add_patch(patches.Rectangle((0, 0), self.block_w, self.block_h, linewidth=1.5, edgecolor='#555555',
-                                            facecolor='#252525', linestyle='-.', zorder=0))
-        self.ax.plot(0, 0, marker='+', color='#ffffff', markersize=15, markeredgewidth=1.5, zorder=1)
+        origin = pg.ScatterPlotItem([0], [0], size=15, pen=pg.mkPen('w', width=2), brush='w', symbol='+')
+        self.canvas.addItem(origin)
 
-        if not self.gds_list: self.ax.text(self.block_w / 2, self.block_h / 2, 'No GDS Loaded', ha='center',
-                                           va='center', color='#bbbbbb', fontsize=12)
+        if not self.gds_list:
+            text = pg.TextItem('No GDS Loaded', color='#bbbbbb', anchor=(0.5, 0.5))
+            text.setPos(self.block_w / 2, self.block_h / 2)
+            self.canvas.addItem(text)
 
         shadow_offset = min(self.block_w, self.block_h) * 0.015
 
@@ -1076,109 +1118,147 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             sx, sy = t_box.left + gds['offset_x'], t_box.bottom + gds['offset_y']
             w, h = t_box.width(), t_box.height()
 
-            shadow_rect = patches.Rectangle((sx + shadow_offset, sy - shadow_offset), w, h,
-                                            linewidth=0, facecolor='black', alpha=0.0, zorder=8)
-            self.ax.add_patch(shadow_rect)
+            shadow_rect = QtWidgets.QGraphicsRectItem(sx + shadow_offset, sy - shadow_offset, w, h)
+            shadow_rect.setBrush(pg.mkBrush(0, 0, 0, 150))
+            shadow_rect.setPen(pg.mkPen(None))
+            shadow_rect.setOpacity(0.0)
+            shadow_rect.setZValue(8)
+            self.canvas.addItem(shadow_rect)
             gds['shadow_patch'] = shadow_rect
 
-            rect = patches.Rectangle((sx, sy), w, h, linewidth=0.5, edgecolor=gds['color'], facecolor=gds['color'],
-                                     alpha=0.6, zorder=10)
-            self.ax.add_patch(rect)
+            rect = QtWidgets.QGraphicsRectItem(sx, sy, w, h)
+            rect.setBrush(pg.mkBrush(gds['color'] + '60'))
+            rect.setPen(pg.mkPen(gds['color'], width=1))
+            rect.setZValue(10)
+            self.canvas.addItem(rect)
             gds['patch'] = rect
-            gds['collection'] = None
 
+            gds['collection'] = None
             if not self.btn_bbox.isChecked() and gds['true_polygons']:
-                fc, ec = mcolors.to_rgba('black', alpha=0.5), mcolors.to_rgba(gds['color'], alpha=0.9)
-                coll = PolyCollection(gds['true_polygons'], facecolors=fc, edgecolors=ec, linewidths=0.5, zorder=15)
-                tr = mtransforms.Affine2D()
+                path = QtGui.QPainterPath()
+                for poly in gds['true_polygons']:
+                    qpoly = QtGui.QPolygonF([QtCore.QPointF(pt[0], pt[1]) for pt in poly])
+                    path.addPolygon(qpoly)
+
+                path_item = QtWidgets.QGraphicsPathItem(path)
+                path_item.setBrush(pg.mkBrush(0, 0, 0, 150))
+                path_item.setPen(pg.mkPen(gds['color'] + 'E0', width=1))
+
+                tr = QtGui.QTransform()
+                tr.translate(gds['offset_x'], gds['offset_y'])
+                tr.translate(gds['trans'].disp.x, gds['trans'].disp.y)
+                tr.rotate(gds['trans'].rot * 90.0)
                 if gds['trans'].is_mirror(): tr.scale(1.0, -1.0)
-                tr.rotate_deg(gds['trans'].rot * 90.0)
-                tr.translate(gds['trans'].disp.x + gds['offset_x'], gds['trans'].disp.y + gds['offset_y'])
-                coll.set_transform(tr + self.ax.transData)
-                self.ax.add_collection(coll)
-                gds['collection'] = coll
+                path_item.setTransform(tr)
+
+                path_item.setZValue(15)
+                self.canvas.addItem(path_item)
+                gds['collection'] = path_item
 
             ratio = min(w, h) / min(self.block_w, self.block_h) if min(self.block_w, self.block_h) > 0 else 1.0
-            gds['center_text'] = self.ax.text(sx + w / 2, sy + h / 2, gds['name'], ha='center', va='center',
-                                              fontsize=max(6, min(35, int(6 + 18 * ratio))), color='white',
-                                              fontweight='bold', alpha=0.7, zorder=90)
+            text = pg.TextItem(gds['name'], color='w', anchor=(0.5, 0.5))
+            text.setPos(sx + w / 2, sy + h / 2)
+            text.setZValue(90)
+            self.canvas.addItem(text)
+            gds['center_text'] = text
 
         for m in self.measurements:
-            self.ax.plot([m['x0'], m['x1']], [m['y0'], m['y1']], color='#FF1493', linestyle='--', linewidth=1,
-                         zorder=300)
-            self.ax.text(m['x1'], m['y1'],
-                         f" L: {math.hypot(m['x1'] - m['x0'], m['y1'] - m['y0']):.2f}\n dx: {abs(m['x1'] - m['x0']):.2f}\n dy: {abs(m['y1'] - m['y0']):.2f}",
-                         color='#FF1493', fontsize=10, fontweight='bold', zorder=301,
-                         bbox=dict(facecolor='black', alpha=0.8, edgecolor='none', pad=2))
+            line = QtWidgets.QGraphicsLineItem(m['x0'], m['y0'], m['x1'], m['y1'])
+            line.setPen(pg.mkPen('#FF1493', width=2, style=QtCore.Qt.DashLine))
+            self.canvas.addItem(line)
+
+            info = f"L: {math.hypot(m['x1'] - m['x0'], m['y1'] - m['y0']):.2f}\ndx: {abs(m['x1'] - m['x0']):.2f}\ndy: {abs(m['y1'] - m['y0']):.2f}"
+            t = pg.TextItem(info, color='#FF1493', anchor=(0, 1), fill=pg.mkBrush(0, 0, 0, 200))
+            t.setPos(m['x1'], m['y1'])
+            self.canvas.addItem(t)
 
         for ut in self.user_texts:
-            tp = TextPath((ut['x'], ut['y']), ut['text'], size=ut['size'])
-            text_patch = PathPatch(tp, facecolor='#00CED1', edgecolor='none', zorder=250, alpha=0.8)
-            self.ax.add_patch(text_patch)
-            ut['text_obj'] = text_patch
+            path = self.create_text_path(ut['text'], ut['size'], ut['x'], ut['y'])
+            text_item = QtWidgets.QGraphicsPathItem(path)
+            text_item.setBrush(pg.mkBrush('#00CED1'))
+            text_item.setPen(pg.mkPen(None))
+            text_item.setZValue(250)
+            self.canvas.addItem(text_item)
+            ut['text_obj'] = text_item
 
         for s in self.user_shapes:
             if s['type'] in ['box', 'via_array']:
                 pts = s['points']
-                x0, y0 = pts[0]
+                x0, y0 = pts[0];
                 x1, y1 = pts[1]
-                fc = '#FF8C00' if s['type'] == 'box' else 'none'
-                ec = '#FF8C00' if s['type'] == 'box' else '#00CED1'
-                hatch = None if s['type'] == 'box' else '..'
-                rect = patches.Rectangle((min(x0, x1), min(y0, y1)), abs(x1 - x0), abs(y1 - y0),
-                                         fill=(s['type'] == 'box'), facecolor=fc, hatch=hatch, alpha=0.5, edgecolor=ec,
-                                         zorder=240, linewidth=2)
-                self.ax.add_patch(rect)
+                rect = QtWidgets.QGraphicsRectItem(min(x0, x1), min(y0, y1), abs(x1 - x0), abs(y1 - y0))
+
+                if s['type'] == 'box':
+                    rect.setBrush(pg.mkBrush(255, 140, 0, 120))
+                    rect.setPen(pg.mkPen('#FF8C00', width=2))
+                else:
+                    rect.setBrush(pg.mkBrush(0, 0, 0, 0))
+                    rect.setPen(pg.mkPen('#00CED1', width=2, style=QtCore.Qt.DotLine))
+                rect.setZValue(240)
+                self.canvas.addItem(rect)
                 s['patch'] = rect
+
             elif s['type'] == 'polygon':
-                poly = patches.Polygon(s['points'], closed=True, fill=True, facecolor='#32CD32', alpha=0.5,
-                                       edgecolor='#32CD32', zorder=240)
-                self.ax.add_patch(poly)
+                qpoly = QtGui.QPolygonF([QtCore.QPointF(x, y) for x, y in s['points']])
+                poly = QtWidgets.QGraphicsPolygonItem(qpoly)
+                poly.setBrush(pg.mkBrush(50, 205, 50, 120))
+                poly.setPen(pg.mkPen('#32CD32', width=1))
+                poly.setZValue(240)
+                self.canvas.addItem(poly)
                 s['patch'] = poly
+
             elif s['type'] == 'path':
-                path_points = [db.DPoint(x, y) for x, y in s['points']]
-                if len(path_points) >= 2:
-                    dpath = db.DPath(path_points, s['width'])
-                    hull_pts = [(pt.x, pt.y) for pt in dpath.polygon().each_point_hull()]
-                    poly = patches.Polygon(hull_pts, closed=True, fill=True, facecolor='#9370DB', alpha=0.5,
-                                           edgecolor='#9370DB', zorder=240)
-                    self.ax.add_patch(poly)
+                pts = [db.DPoint(x, y) for x, y in s['points']]
+                if len(pts) >= 2:
+                    hull_pts = [(pt.x, pt.y) for pt in db.DPath(pts, s['width']).polygon().each_point_hull()]
+                    qpoly = QtGui.QPolygonF([QtCore.QPointF(x, y) for x, y in hull_pts])
+                    poly = QtWidgets.QGraphicsPolygonItem(qpoly)
+                    poly.setBrush(pg.mkBrush(147, 112, 219, 120))
+                    poly.setPen(pg.mkPen('#9370DB', width=1))
+                    poly.setZValue(240)
+                    self.canvas.addItem(poly)
                     s['patch'] = poly
 
         if self.crop_box:
             pts = self.crop_box
-            x0, y0 = pts[0]
+            x0, y0 = pts[0];
             x1, y1 = pts[1]
-            rect = patches.Rectangle((min(x0, x1), min(y0, y1)), abs(x1 - x0), abs(y1 - y0), fill=False,
-                                     edgecolor='red', linestyle='--', linewidth=3, zorder=400)
-            self.ax.add_patch(rect)
+            rect = QtWidgets.QGraphicsRectItem(min(x0, x1), min(y0, y1), abs(x1 - x0), abs(y1 - y0))
+            rect.setPen(pg.mkPen('r', width=3, style=QtCore.Qt.DashLine))
+            rect.setBrush(pg.mkBrush(255, 0, 0, 20))
+            rect.setZValue(400)
+            self.canvas.addItem(rect)
+            self.crop_rect_item = rect
+        else:
+            self.crop_rect_item = None
 
         self.update_canvas_selection()
+        self.draw_overlaps()
 
         if reset_view:
-            self.ax.set_xlim(-self.block_w * 0.1, self.block_w * 1.1)
-            self.ax.set_ylim(-self.block_h * 0.1, self.block_h * 1.1)
-        else:
-            self.ax.set_xlim(cur_xlim)
-            self.ax.set_ylim(cur_ylim)
+            self.canvas.setXRange(-self.block_w * 0.1, self.block_w * 1.1, padding=0)
+            self.canvas.setYRange(-self.block_h * 0.1, self.block_h * 1.1, padding=0)
 
-        self.ax.set_aspect('equal', adjustable='datalim')
-        self.ax.grid(True, linestyle='-', color='#444444', alpha=0.4)
-        self.draw_overlaps()
-        self.canvas.draw()
+    # ================= 精准的射线碰撞检测 =================
+    def is_hit(self, x, y, item):
+        if not item: return False
+        pt = QtCore.QPointF(x, y)
 
-    def on_scroll(self, event):
-        if not event.inaxes: return
-        scale = 1 / 1.2 if event.button == 'up' else 1.2
-        cur_x, cur_y = self.ax.get_xlim(), self.ax.get_ylim()
-        self.ax.set_xlim(
-            [event.xdata - (event.xdata - cur_x[0]) * scale, event.xdata + (cur_x[1] - event.xdata) * scale])
-        self.ax.set_ylim(
-            [event.ydata - (event.ydata - cur_y[0]) * scale, event.ydata + (cur_y[1] - event.ydata) * scale])
-        self.canvas.draw_idle()
+        if isinstance(item, (QtWidgets.QGraphicsRectItem, QtWidgets.QGraphicsPolygonItem, QtWidgets.QGraphicsPathItem)):
+            return item.contains(pt)
 
+        scene_pt = self.canvas.plotItem.vb.mapViewToScene(pt)
+        local_pt = item.mapFromScene(scene_pt)
+        if isinstance(item, pg.TextItem):
+            return item.boundingRect().contains(local_pt)
+
+        return item.contains(local_pt)
+
+    # ================= 鼠标坐标计算与吸附 =================
     def get_snapped_coordinate(self, x, y):
-        cur_xlim, cur_ylim = self.ax.get_xlim(), self.ax.get_ylim()
+        view_range = self.canvas.viewRange()
+        cur_xlim, cur_ylim = view_range[0], view_range[1]
+
         best_x, best_y = x, y
         min_dx, min_dy = (cur_xlim[1] - cur_xlim[0]) * 0.02, (cur_ylim[1] - cur_ylim[0]) * 0.02
         snapped_x, snapped_y = False, False
@@ -1191,169 +1271,17 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 if abs(y - py) < min_dy: min_dy, best_y, snapped_y = abs(y - py), py, True
         return best_x, best_y, snapped_x, snapped_y
 
-    def on_press(self, event):
-        if not event.inaxes: return
-        self.last_mouse_event = event
+    def get_pois(self, gds, temp_ox=None, temp_oy=None):
+        t_box = gds['trans'] * gds['base_bbox']
+        ox, oy = (gds['offset_x'] if temp_ox is None else temp_ox), (gds['offset_y'] if temp_oy is None else temp_oy)
+        return [t_box.left + ox, t_box.right + ox, (t_box.left + t_box.right) / 2 + ox], \
+            [t_box.bottom + oy, t_box.top + oy, (t_box.bottom + t_box.top) / 2 + oy]
 
-        if event.dblclick and event.button == 1:
-            for i in range(len(self.user_texts) - 1, -1, -1):
-                if 'text_obj' in self.user_texts[i] and self.user_texts[i]['text_obj']:
-                    cont, _ = self.user_texts[i]['text_obj'].contains(event)
-                    if cont: self.edit_text_dialog(i); return
-            for i in range(len(self.user_shapes) - 1, -1, -1):
-                if 'patch' in self.user_shapes[i] and self.user_shapes[i]['patch']:
-                    cont, _ = self.user_shapes[i]['patch'].contains(event)
-                    if cont: self.edit_shape_dialog(i); return
-            return
+    def apply_ortho(self, nx, ny, ref_pt):
+        if abs(nx - ref_pt[0]) > abs(ny - ref_pt[1]): return nx, ref_pt[1]
+        return ref_pt[0], ny
 
-        snap_x, snap_y, _, _ = self.get_snapped_coordinate(event.xdata, event.ydata)
-
-        if (self.btn_measure.isChecked() and self.measure_state == 1 and self.measure_start_pt) or \
-                (self.draw_mode in ['polygon', 'path'] and self.draw_points):
-            if self.ctrl_pressed:
-                if self.btn_measure.isChecked():
-                    last_x, last_y = self.measure_start_pt
-                else:
-                    last_x, last_y = self.draw_points[-1]
-                if abs(snap_x - last_x) > abs(snap_y - last_y):
-                    snap_y = last_y
-                else:
-                    snap_x = last_x
-
-        if self.draw_mode is not None:
-            if self.draw_mode == 'text':
-                if event.button == 1:
-                    self.save_snapshot()
-                    new_text = self.draw_current_props.copy()
-                    new_text['x'], new_text['y'] = snap_x, snap_y
-                    self.user_texts.append(new_text)
-                    self.cancel_draw_mode()
-                    self.status_label.setText("Text added.")
-                    self.draw_preview(reset_view=False)
-                return
-
-            elif self.draw_mode in ['box', 'via_array', 'crop']:
-                if event.button == 1:
-                    if not self.draw_points:
-                        self.draw_points.append((snap_x, snap_y))
-                    else:
-                        self.draw_points.append((snap_x, snap_y));
-                        self.finalize_shape()
-                return
-
-            elif self.draw_mode in ['polygon', 'path']:
-                if event.button == 1:
-                    self.draw_points.append((snap_x, snap_y))
-                elif event.button == 3:
-                    if len(self.draw_points) >= (3 if self.draw_mode == 'polygon' else 2):
-                        self.finalize_shape()
-                    else:
-                        self.cancel_draw_mode()
-                return
-
-        if self.btn_measure.isChecked() and event.button == 1:
-            if self.measure_state == 0:
-                self.clear_active_measurement()
-                self.measure_start_pt = (snap_x, snap_y)
-                self.measure_line, = self.ax.plot([snap_x, snap_x], [snap_y, snap_y], color='#FF1493', linestyle='--',
-                                                  linewidth=1, zorder=300)
-                self.measure_text = self.ax.text(snap_x, snap_y, '', color='#FF1493', fontsize=10, fontweight='bold',
-                                                 zorder=301,
-                                                 bbox=dict(facecolor='black', alpha=0.8, edgecolor='none', pad=2))
-                self.snap_indicator, = self.ax.plot([snap_x], [snap_y], marker='+', color='red', markersize=12,
-                                                    markeredgewidth=2, zorder=305)
-                self.measure_state = 1
-            elif self.measure_state == 1:
-                self.save_snapshot()
-                self.measurements.append(
-                    {'x0': self.measure_start_pt[0], 'y0': self.measure_start_pt[1], 'x1': snap_x, 'y1': snap_y})
-                self.measure_state = 0
-                if self.snap_indicator: self.snap_indicator.set_data([], [])
-                self.measure_line = self.measure_text = None
-            self.canvas.draw_idle()
-            return
-
-        for line in self.guide_lines: line.remove()
-        self.guide_lines.clear()
-
-        for i in range(len(self.user_texts) - 1, -1, -1):
-            if 'text_obj' in self.user_texts[i] and self.user_texts[i]['text_obj']:
-                cont, _ = self.user_texts[i]['text_obj'].contains(event)
-                if cont and event.button == 1:
-                    self.active_shape_type = 'text'
-                    self.active_shape_idx = i
-                    self.list_widget.blockSignals(True)
-                    self.list_widget.clearSelection()
-                    self.list_widget.blockSignals(False)
-                    self.update_canvas_selection()
-
-                    self.dragging_type = 'text'
-                    self.dragging_idx = i
-                    self.drag_start_x, self.drag_start_y = event.xdata, event.ydata
-                    self.rect_start_x, self.rect_start_y = self.user_texts[i]['x'], self.user_texts[i]['y']
-                    return
-
-        for i in range(len(self.user_shapes) - 1, -1, -1):
-            if 'patch' in self.user_shapes[i] and self.user_shapes[i]['patch']:
-                cont, _ = self.user_shapes[i]['patch'].contains(event)
-                if cont and event.button == 1:
-                    self.active_shape_type = 'shape'
-                    self.active_shape_idx = i
-                    self.list_widget.blockSignals(True)
-                    self.list_widget.clearSelection()
-                    self.list_widget.blockSignals(False)
-                    self.update_canvas_selection()
-
-                    self.dragging_type = 'shape'
-                    self.dragging_idx = i
-                    self.drag_start_x, self.drag_start_y = event.xdata, event.ydata
-                    self.drag_start_offsets = list(self.user_shapes[i]['points'])
-                    return
-
-        clicked_idx = next(
-            (i for i in range(len(self.gds_list) - 1, -1, -1) if self.gds_list[i]['patch'].contains(event)[0]), -1)
-        if clicked_idx != -1:
-            self.active_shape_type = None
-            self.active_shape_idx = -1
-
-            if event.button in [2, 3]:
-                self.show_context_menu(clicked_idx);
-                return
-            elif event.button == 1:
-                self.dragging_type = 'gds'
-                self.dragging_idx = clicked_idx
-                self.drag_start_x, self.drag_start_y = event.xdata, event.ydata
-                self.rect_start_x, self.rect_start_y = self.gds_list[clicked_idx]['patch'].get_x(), \
-                    self.gds_list[clicked_idx]['patch'].get_y()
-
-                current_selection = [self.list_widget.row(item) for item in self.list_widget.selectedItems()]
-
-                self.list_widget.blockSignals(True)
-                try:
-                    if self.ctrl_pressed:
-                        if clicked_idx in current_selection:
-                            self.list_widget.item(clicked_idx).setSelected(False)
-                        else:
-                            self.list_widget.item(clicked_idx).setSelected(True)
-                    elif clicked_idx not in current_selection:
-                        self.list_widget.clearSelection()
-                        self.list_widget.item(clicked_idx).setSelected(True)
-                finally:
-                    self.list_widget.blockSignals(False)
-
-                self.drag_start_offsets = {idx: (self.gds_list[idx]['offset_x'], self.gds_list[idx]['offset_y']) for idx
-                                           in [self.list_widget.row(item) for item in self.list_widget.selectedItems()]}
-                self.on_listbox_select()
-                return
-
-        elif event.button == 1 and not self.ctrl_pressed:
-            self.active_shape_type = None
-            self.active_shape_idx = -1
-            self.list_widget.blockSignals(True)
-            self.list_widget.clearSelection()
-            self.list_widget.blockSignals(False)
-            self.update_canvas_selection()
-
+    # ================== 核心：绘制落笔与保存 ==================
     def finalize_shape(self):
         self.save_snapshot()
         if self.draw_mode == 'crop':
@@ -1365,98 +1293,272 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         self.cancel_draw_mode()
         self.draw_preview(reset_view=False)
 
-    def on_motion(self, event):
-        if not event.inaxes: return
-        self.last_mouse_event = event
-        snap_x, snap_y, sn_x, sn_y = self.get_snapped_coordinate(event.xdata, event.ydata)
+    # ================== 核心：鼠标事件分发处理 ==================
+    def handle_mouse_doubleclick(self, x, y):
+        for i in range(len(self.user_texts) - 1, -1, -1):
+            if 'text_obj' in self.user_texts[i] and self.is_hit(x, y, self.user_texts[i]['text_obj']):
+                self.edit_text_dialog(i);
+                return
+        for i in range(len(self.user_shapes) - 1, -1, -1):
+            if 'patch' in self.user_shapes[i] and self.is_hit(x, y, self.user_shapes[i]['patch']):
+                self.edit_shape_dialog(i);
+                return
 
-        if (self.btn_measure.isChecked() and self.measure_state == 1 and self.measure_start_pt) or \
-                (self.draw_mode in ['polygon', 'path'] and self.draw_points):
+        if getattr(self, 'crop_rect_item', None) and self.is_hit(x, y, self.crop_rect_item):
+            self.edit_crop_dialog()
+            return
+
+        if self.draw_mode in ['polygon', 'path']:
+            if len(self.draw_points) >= (3 if self.draw_mode == 'polygon' else 2):
+                self.finalize_shape()
+            else:
+                self.cancel_draw_mode()
+
+    def handle_mouse_click(self, x, y, is_double=False, button=QtCore.Qt.LeftButton):
+        if button == QtCore.Qt.RightButton:
+            clicked_idx = next(
+                (i for i in range(len(self.gds_list) - 1, -1, -1) if self.is_hit(x, y, self.gds_list[i]['patch'])), -1)
+            if clicked_idx != -1:
+                self.show_context_menu(clicked_idx)
+            return
+
+        snap_x, snap_y, _, _ = self.get_snapped_coordinate(x, y)
+        if self.ctrl_pressed:
+            if self.btn_measure.isChecked() and self.measure_start_pt:
+                snap_x, snap_y = self.apply_ortho(snap_x, snap_y, self.measure_start_pt)
+            elif self.draw_mode in ['polygon', 'path'] and self.draw_points:
+                snap_x, snap_y = self.apply_ortho(snap_x, snap_y, self.draw_points[-1])
+
+        if self.draw_mode == 'text':
+            self.save_snapshot()
+            new_text = self.draw_current_props.copy()
+            new_text['x'], new_text['y'] = snap_x, snap_y
+            self.user_texts.append(new_text)
+            self.cancel_draw_mode()
+            self.draw_preview(reset_view=False)
+            return
+        elif self.draw_mode in ['box', 'via_array', 'crop']:
+            if not self.draw_points:
+                self.draw_points.append((snap_x, snap_y))
+            else:
+                self.draw_points.append((snap_x, snap_y))
+                self.finalize_shape()
+            return
+        elif self.draw_mode in ['polygon', 'path']:
+            self.draw_points.append((snap_x, snap_y))
+            return
+
+        if self.btn_measure.isChecked():
+            if self.measure_state == 0:
+                self.clear_active_measurement()
+                self.measure_start_pt = (snap_x, snap_y)
+                self.measure_line = QtWidgets.QGraphicsLineItem(snap_x, snap_y, snap_x, snap_y)
+                self.measure_line.setPen(pg.mkPen('#FF1493', width=2, style=QtCore.Qt.DashLine))
+                self.measure_line.setZValue(300)
+                self.canvas.addItem(self.measure_line)
+                self.measure_text = pg.TextItem('', color='#FF1493', fill=pg.mkBrush(0, 0, 0, 200))
+                self.measure_text.setPos(snap_x, snap_y)
+                self.canvas.addItem(self.measure_text)
+                self.measure_state = 1
+            elif self.measure_state == 1:
+                self.save_snapshot()
+                self.measurements.append(
+                    {'x0': self.measure_start_pt[0], 'y0': self.measure_start_pt[1], 'x1': snap_x, 'y1': snap_y})
+                self.measure_state = 0
+                self.measure_line = self.measure_text = None
+            return
+
+        self._process_selection_at(x, y, prepare_drag=False)
+
+    def handle_mouse_press(self, x, y):
+        snap_x, snap_y, _, _ = self.get_snapped_coordinate(x, y)
+        if self.ctrl_pressed:
+            if self.btn_measure.isChecked() and self.measure_start_pt:
+                snap_x, snap_y = self.apply_ortho(snap_x, snap_y, self.measure_start_pt)
+            elif self.draw_mode in ['polygon', 'path'] and self.draw_points:
+                snap_x, snap_y = self.apply_ortho(snap_x, snap_y, self.draw_points[-1])
+        pass
+
+    def handle_drag_start(self, x, y):
+        snap_x, snap_y, _, _ = self.get_snapped_coordinate(x, y)
+        if self.draw_mode in ['box', 'via_array', 'crop'] and not self.draw_points:
+            self.draw_points.append((snap_x, snap_y))
+            return
+        if self.draw_mode is not None or self.btn_measure.isChecked():
+            return
+
+        self._process_selection_at(x, y, prepare_drag=True)
+
+    def _process_selection_at(self, x, y, prepare_drag=False):
+        for i in range(len(self.user_texts) - 1, -1, -1):
+            if 'text_obj' in self.user_texts[i] and self.is_hit(x, y, self.user_texts[i]['text_obj']):
+                self.active_shape_type = 'text';
+                self.active_shape_idx = i
+                self.list_widget.blockSignals(True);
+                self.list_widget.clearSelection();
+                self.list_widget.blockSignals(False)
+                self.update_canvas_selection()
+                if prepare_drag:
+                    self.dragging_type = 'text';
+                    self.dragging_idx = i
+                    self.drag_start_x, self.drag_start_y = x, y
+                    self.rect_start_x, self.rect_start_y = self.user_texts[i]['x'], self.user_texts[i]['y']
+                return
+
+        for i in range(len(self.user_shapes) - 1, -1, -1):
+            if 'patch' in self.user_shapes[i] and self.is_hit(x, y, self.user_shapes[i]['patch']):
+                self.active_shape_type = 'shape';
+                self.active_shape_idx = i
+                self.list_widget.blockSignals(True);
+                self.list_widget.clearSelection();
+                self.list_widget.blockSignals(False)
+                self.update_canvas_selection()
+                if prepare_drag:
+                    self.dragging_type = 'shape';
+                    self.dragging_idx = i
+                    self.drag_start_x, self.drag_start_y = x, y
+                    self.drag_start_offsets = list(self.user_shapes[i]['points'])
+                return
+
+        clicked_idx = next(
+            (i for i in range(len(self.gds_list) - 1, -1, -1) if self.is_hit(x, y, self.gds_list[i]['patch'])), -1)
+        if clicked_idx != -1:
+            self.active_shape_type = None;
+            self.active_shape_idx = -1
+            current_selection = [self.list_widget.row(item) for item in self.list_widget.selectedItems()]
+            self.list_widget.blockSignals(True)
             if self.ctrl_pressed:
-                if self.btn_measure.isChecked():
-                    last_x, last_y = self.measure_start_pt
+                if clicked_idx in current_selection:
+                    self.list_widget.item(clicked_idx).setSelected(False)
                 else:
-                    last_x, last_y = self.draw_points[-1]
-                if abs(snap_x - last_x) > abs(snap_y - last_y):
-                    snap_y = last_y
-                else:
-                    snap_x = last_x
+                    self.list_widget.item(clicked_idx).setSelected(True)
+            elif clicked_idx not in current_selection:
+                self.list_widget.clearSelection()
+                self.list_widget.item(clicked_idx).setSelected(True)
+            self.list_widget.blockSignals(False)
+            self.on_listbox_select()
+
+            if prepare_drag:
+                self.dragging_type = 'gds';
+                self.dragging_idx = clicked_idx
+                self.drag_start_x, self.drag_start_y = x, y
+                self.rect_start_x = self.gds_list[clicked_idx]['patch'].rect().x()
+                self.rect_start_y = self.gds_list[clicked_idx]['patch'].rect().y()
+                self.drag_start_offsets = {idx: (self.gds_list[idx]['offset_x'], self.gds_list[idx]['offset_y'])
+                                           for idx in
+                                           [self.list_widget.row(item) for item in self.list_widget.selectedItems()]}
+            return
+
+        if not self.ctrl_pressed:
+            self.active_shape_type = None;
+            self.active_shape_idx = -1
+            self.list_widget.blockSignals(True);
+            self.list_widget.clearSelection();
+            self.list_widget.blockSignals(False)
+            self.update_canvas_selection()
+
+    def handle_drag_finish(self, x, y):
+        snap_x, snap_y, _, _ = self.get_snapped_coordinate(x, y)
+        if self.ctrl_pressed:
+            if self.btn_measure.isChecked() and self.measure_start_pt:
+                snap_x, snap_y = self.apply_ortho(snap_x, snap_y, self.measure_start_pt)
+            elif self.draw_mode in ['polygon', 'path'] and self.draw_points:
+                snap_x, snap_y = self.apply_ortho(snap_x, snap_y, self.draw_points[-1])
+
+        if self.draw_mode in ['box', 'via_array', 'crop'] and len(self.draw_points) == 1:
+            self.draw_points.append((snap_x, snap_y))
+            self.finalize_shape()
+            return
+
+        if self.dragging_type is not None:
+            self.dragging_type = None;
+            self.dragging_idx = -1
+            self.drag_snapshot_taken = False;
+            self.drag_start_offsets.clear()
+            for line in self.guide_lines: self.canvas.removeItem(line)
+            self.guide_lines.clear()
+            self.update_canvas_selection()
+
+    def handle_mouse_move(self, x, y):
+        snap_x, snap_y, sn_x, sn_y = self.get_snapped_coordinate(x, y)
+        if self.ctrl_pressed:
+            if self.btn_measure.isChecked() and self.measure_start_pt:
+                snap_x, snap_y = self.apply_ortho(snap_x, snap_y, self.measure_start_pt)
+            elif self.draw_mode in ['polygon', 'path'] and self.draw_points:
+                snap_x, snap_y = self.apply_ortho(snap_x, snap_y, self.draw_points[-1])
 
         if self.draw_mode is not None:
             if self.draw_mode == 'text':
+                path = self.create_text_path(self.draw_current_props['text'], self.draw_current_props['size'], snap_x,
+                                             snap_y)
                 if not self.temp_draw_preview:
-                    tp = TextPath((snap_x, snap_y), self.draw_current_props['text'],
-                                  size=self.draw_current_props['size'])
-                    self.temp_draw_preview = PathPatch(tp, facecolor='#00CED1', edgecolor='none', zorder=350, alpha=0.5)
-                    self.ax.add_patch(self.temp_draw_preview)
+                    self.temp_draw_preview = QtWidgets.QGraphicsPathItem(path)
+                    self.temp_draw_preview.setBrush(pg.mkBrush('#00CED1'))
+                    self.temp_draw_preview.setPen(pg.mkPen(None))
+                    self.temp_draw_preview.setZValue(350)
+                    self.canvas.addItem(self.temp_draw_preview)
                 else:
-                    self.temp_draw_preview.set_path(TextPath((snap_x, snap_y), self.draw_current_props['text'],
-                                                             size=self.draw_current_props['size']))
+                    self.temp_draw_preview.setPath(path)
+
             elif self.draw_mode in ['box', 'via_array', 'crop'] and len(self.draw_points) == 1:
                 x0, y0 = self.draw_points[0]
                 if not self.temp_draw_preview:
-                    fc = 'none' if self.draw_mode in ['via_array', 'crop'] else '#FF8C00'
-                    ec = 'red' if self.draw_mode == 'crop' else (
-                        '#00CED1' if self.draw_mode == 'via_array' else '#FF8C00')
-                    ls = '--' if self.draw_mode == 'crop' else '-'
-                    hatch = '..' if self.draw_mode == 'via_array' else None
-                    self.temp_draw_preview = patches.Rectangle((min(x0, snap_x), min(y0, snap_y)), abs(snap_x - x0),
-                                                               abs(snap_y - y0), fill=(self.draw_mode == 'box'),
-                                                               facecolor=fc, edgecolor=ec, linestyle=ls, hatch=hatch,
-                                                               alpha=0.5, linewidth=2)
-                    self.ax.add_patch(self.temp_draw_preview)
+                    self.temp_draw_preview = QtWidgets.QGraphicsRectItem(min(x0, snap_x), min(y0, snap_y),
+                                                                         abs(snap_x - x0), abs(snap_y - y0))
+                    self.temp_draw_preview.setPen(pg.mkPen('y', width=2, style=QtCore.Qt.DashLine))
+                    self.canvas.addItem(self.temp_draw_preview)
                 else:
-                    self.temp_draw_preview.set_bounds(min(x0, snap_x), min(y0, snap_y), abs(snap_x - x0),
-                                                      abs(snap_y - y0))
+                    self.temp_draw_preview.setRect(min(x0, snap_x), min(y0, snap_y), abs(snap_x - x0), abs(snap_y - y0))
+
             elif self.draw_mode in ['polygon', 'path'] and len(self.draw_points) > 0:
                 pts = self.draw_points + [(snap_x, snap_y)]
+                path = QtGui.QPainterPath()
+                path.moveTo(pts[0][0], pts[0][1])
+                for px, py in pts[1:]:
+                    path.lineTo(px, py)
                 if self.draw_mode == 'polygon':
-                    xs, ys = zip(*pts)
-                    if not self.temp_draw_preview:
-                        self.temp_draw_preview, = self.ax.plot(xs, ys, color='red', linestyle='--', linewidth=2)
-                    else:
-                        self.temp_draw_preview.set_data(xs, ys)
-                elif self.draw_mode == 'path':
-                    path_points = [db.DPoint(x, y) for x, y in pts]
-                    if len(path_points) >= 2:
-                        hull_pts = [(pt.x, pt.y) for pt in
-                                    db.DPath(path_points, self.draw_current_props['width']).polygon().each_point_hull()]
-                        if not self.temp_draw_preview:
-                            self.temp_draw_preview = patches.Polygon(hull_pts, closed=True, fill=True, facecolor='red',
-                                                                     alpha=0.3, edgecolor='red')
-                            self.ax.add_patch(self.temp_draw_preview)
-                        else:
-                            self.temp_draw_preview.set_xy(hull_pts)
-            self.canvas.draw_idle()
+                    path.lineTo(pts[0][0], pts[0][1])
+
+                if not self.temp_draw_preview:
+                    self.temp_draw_preview = QtWidgets.QGraphicsPathItem(path)
+                    self.temp_draw_preview.setPen(pg.mkPen('y', width=2, style=QtCore.Qt.DashLine))
+                    self.canvas.addItem(self.temp_draw_preview)
+                else:
+                    self.temp_draw_preview.setPath(path)
             return
 
         if self.btn_measure.isChecked():
             if not self.snap_indicator:
-                self.snap_indicator, = self.ax.plot([snap_x], [snap_y], marker='+', color='red', markersize=12,
-                                                    markeredgewidth=2, zorder=305)
+                self.snap_indicator = pg.ScatterPlotItem([snap_x], [snap_y], size=12, pen=pg.mkPen('r', width=2),
+                                                         brush='r', symbol='+')
+                self.canvas.addItem(self.snap_indicator)
             else:
-                if self.measure_state in [0, 1]: self.snap_indicator.set_data([snap_x], [snap_y])
-            for line in self.guide_lines: line.remove()
+                self.snap_indicator.setData([snap_x], [snap_y])
+
+            for line in self.guide_lines: self.canvas.removeItem(line)
             self.guide_lines.clear()
-            if sn_x: self.guide_lines.append(
-                self.ax.axvline(x=snap_x, color='#00CED1', linestyle=':', linewidth=1.5, zorder=200))
-            if sn_y: self.guide_lines.append(
-                self.ax.axhline(y=snap_y, color='#00CED1', linestyle=':', linewidth=1.5, zorder=200))
+            if sn_x:
+                l = pg.InfiniteLine(pos=snap_x, angle=90, pen=pg.mkPen('#FF8C00', width=1.5, style=QtCore.Qt.DashLine))
+                self.canvas.addItem(l);
+                self.guide_lines.append(l)
+            if sn_y:
+                l = pg.InfiniteLine(pos=snap_y, angle=0, pen=pg.mkPen('#FF8C00', width=1.5, style=QtCore.Qt.DashLine))
+                self.canvas.addItem(l);
+                self.guide_lines.append(l)
 
             if self.measure_state == 1 and self.measure_start_pt is not None:
                 x0, y0 = self.measure_start_pt
-                self.measure_line.set_data([x0, snap_x], [y0, snap_y])
-                self.measure_text.set_position((snap_x, snap_y))
-                self.measure_text.set_text(
+                self.measure_line.setLine(x0, y0, snap_x, snap_y)
+                self.measure_text.setPos(snap_x, snap_y)
+                self.measure_text.setText(
                     f" L: {math.hypot(snap_x - x0, snap_y - y0):.2f}\n dx: {abs(snap_x - x0):.2f}\n dy: {abs(snap_y - y0):.2f}")
-            self.canvas.draw_idle()
             return
 
         if self.dragging_type is None: return
         if not self.drag_snapshot_taken: self.save_snapshot(); self.drag_snapshot_taken = True
 
-        dx_raw = event.xdata - self.drag_start_x
-        dy_raw = event.ydata - self.drag_start_y
+        dx_raw = x - self.drag_start_x
+        dy_raw = y - self.drag_start_y
 
         if self.dragging_type == 'text':
             nx, ny = self.rect_start_x + dx_raw, self.rect_start_y + dy_raw
@@ -1467,10 +1569,10 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 except ValueError:
                     pass
             self.user_texts[self.dragging_idx]['x'], self.user_texts[self.dragging_idx]['y'] = nx, ny
-            tp = TextPath((nx, ny), self.user_texts[self.dragging_idx]['text'],
-                          size=self.user_texts[self.dragging_idx]['size'])
-            self.user_texts[self.dragging_idx]['text_obj'].set_path(tp)
-            self.canvas.draw_idle()
+
+            ut = self.user_texts[self.dragging_idx]
+            path = self.create_text_path(ut['text'], ut['size'], nx, ny)
+            ut['text_obj'].setPath(path)
             return
 
         if self.dragging_type == 'shape':
@@ -1488,20 +1590,19 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             new_pts = [(ox + dx, oy + dy) for ox, oy in self.drag_start_offsets]
             s['points'] = new_pts
             if s['type'] in ['box', 'via_array']:
-                x0, y0 = new_pts[0]
+                x0, y0 = new_pts[0];
                 x1, y1 = new_pts[1]
-                s['patch'].set_bounds(min(x0, x1), min(y0, y1), abs(x1 - x0), abs(y1 - y0))
+                s['patch'].setRect(min(x0, x1), min(y0, y1), abs(x1 - x0), abs(y1 - y0))
             elif s['type'] == 'polygon':
-                s['patch'].set_xy(new_pts)
+                s['patch'].setPolygon(QtGui.QPolygonF([QtCore.QPointF(px, py) for px, py in new_pts]))
             elif s['type'] == 'path':
-                path_points = [db.DPoint(x, y) for x, y in new_pts]
-                if len(path_points) >= 2:
-                    hull_pts = [(pt.x, pt.y) for pt in db.DPath(path_points, s['width']).polygon().each_point_hull()]
-                    s['patch'].set_xy(hull_pts)
-            self.canvas.draw_idle()
+                pts = [db.DPoint(px, py) for px, py in new_pts]
+                if len(pts) >= 2:
+                    hull_pts = [(pt.x, pt.y) for pt in db.DPath(pts, s['width']).polygon().each_point_hull()]
+                    s['patch'].setPolygon(QtGui.QPolygonF([QtCore.QPointF(px, py) for px, py in hull_pts]))
             return
 
-        for line in self.guide_lines: line.remove()
+        for line in self.guide_lines: self.canvas.removeItem(line)
         self.guide_lines.clear()
 
         handle_gds = self.gds_list[self.dragging_idx]
@@ -1526,15 +1627,15 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                         temp_ox, temp_oy = snap_x - t_box.right, snap_y - t_box.top
                     elif anchor == "Center":
                         temp_ox, temp_oy = snap_x - (t_box.left + t_box.right) / 2, snap_y - (
-                                t_box.bottom + t_box.top) / 2
+                                    t_box.bottom + t_box.top) / 2
                     is_grid_snapped = True
             except ValueError:
                 pass
 
         if not is_grid_snapped:
             drag_x_pois, drag_y_pois = self.get_pois(handle_gds, temp_ox, temp_oy)
-            min_dx, min_dy = (self.ax.get_xlim()[1] - self.ax.get_xlim()[0]) * 0.02, (
-                    self.ax.get_ylim()[1] - self.ax.get_ylim()[0]) * 0.02
+            min_dx, min_dy = (self.canvas.viewRange()[0][1] - self.canvas.viewRange()[0][0]) * 0.02, (
+                        self.canvas.viewRange()[1][1] - self.canvas.viewRange()[1][0]) * 0.02
             snap_shift_x, snap_shift_y = 0, 0
             for i, other_gds in enumerate(self.gds_list):
                 if i in self.drag_start_offsets: continue
@@ -1545,7 +1646,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 for dy in drag_y_pois:
                     for oy in other_y_pois:
                         if abs(dy - oy) < min_dy: min_dy, best_snap_y, snap_shift_y = abs(dy - oy), oy, oy - dy
-            temp_ox += snap_shift_x
+            temp_ox += snap_shift_x;
             temp_oy += snap_shift_y
 
         delta_x, delta_y = temp_ox - self.drag_start_offsets[self.dragging_idx][0], temp_oy - \
@@ -1555,60 +1656,44 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             gds = self.gds_list[idx]
             new_ox, new_oy = self.drag_start_offsets[idx][0] + delta_x, self.drag_start_offsets[idx][1] + delta_y
             gds['offset_x'], gds['offset_y'] = new_ox, new_oy
-            nx_final, ny_final = (gds['trans'] * gds['base_bbox']).left + new_ox, (
-                    gds['trans'] * gds['base_bbox']).bottom + new_oy
 
-            gds['patch'].set_x(nx_final)
-            gds['patch'].set_y(ny_final)
+            t_rect = gds['trans'] * gds['base_bbox']
+            nx_final, ny_final = t_rect.left + new_ox, t_rect.bottom + new_oy
+            gds['patch'].setRect(nx_final, ny_final, t_rect.width(), t_rect.height())
 
             if 'shadow_patch' in gds and gds['shadow_patch']:
                 shadow_offset = min(self.block_w, self.block_h) * 0.015
-                gds['shadow_patch'].set_x(nx_final + shadow_offset)
-                gds['shadow_patch'].set_y(ny_final - shadow_offset)
+                gds['shadow_patch'].setRect(nx_final + shadow_offset, ny_final - shadow_offset, t_rect.width(),
+                                            t_rect.height())
 
-            if gds['center_text']: gds['center_text'].set_position(
-                (nx_final + (gds['trans'] * gds['base_bbox']).width() / 2,
-                 ny_final + (gds['trans'] * gds['base_bbox']).height() / 2))
+            if gds['center_text']:
+                gds['center_text'].setPos(nx_final + t_rect.width() / 2, ny_final + t_rect.height() / 2)
 
             if gds.get('collection'):
-                tr = mtransforms.Affine2D()
+                tr = QtGui.QTransform()
+                tr.translate(new_ox, new_oy)
+                tr.translate(gds['trans'].disp.x, gds['trans'].disp.y)
+                tr.rotate(gds['trans'].rot * 90.0)
                 if gds['trans'].is_mirror(): tr.scale(1.0, -1.0)
-                tr.rotate_deg(gds['trans'].rot * 90.0)
-                tr.translate(gds['trans'].disp.x + new_ox, gds['trans'].disp.y + new_oy)
-                gds['collection'].set_transform(tr + self.ax.transData)
+                gds['collection'].setTransform(tr)
 
         if not is_grid_snapped:
-            if best_snap_x is not None: self.guide_lines.append(
-                self.ax.axvline(x=best_snap_x, color='#FF8C00', linestyle='--', linewidth=1.5, zorder=200))
-            if best_snap_y is not None: self.guide_lines.append(
-                self.ax.axhline(y=best_snap_y, color='#FF8C00', linestyle='--', linewidth=1.5, zorder=200))
+            if best_snap_x is not None:
+                l = pg.InfiniteLine(pos=best_snap_x, angle=90,
+                                    pen=pg.mkPen('#FF8C00', width=1.5, style=QtCore.Qt.DashLine))
+                self.canvas.addItem(l);
+                self.guide_lines.append(l)
+            if best_snap_y is not None:
+                l = pg.InfiniteLine(pos=best_snap_y, angle=0,
+                                    pen=pg.mkPen('#FF8C00', width=1.5, style=QtCore.Qt.DashLine))
+                self.canvas.addItem(l);
+                self.guide_lines.append(l)
 
         if [self.list_widget.row(item) for item in self.list_widget.selectedItems()] and \
                 [self.list_widget.row(item) for item in self.list_widget.selectedItems()][0] == self.dragging_idx:
-            x, y = self.get_anchor_coords(handle_gds, self.cb_anchor.currentText())
-            self.inp_x.setText(f"{x:.3f}")
-            self.inp_y.setText(f"{y:.3f}")
-
-        self.draw_overlaps()
-        self.canvas.draw_idle()
-
-    def on_release(self, event):
-        if self.btn_measure.isChecked() and event.button == 1: return
-        if self.dragging_type is not None:
-            self.dragging_type = None
-            self.dragging_idx = -1
-            self.drag_snapshot_taken = False
-            self.drag_start_offsets.clear()
-            for line in self.guide_lines: line.remove()
-            self.guide_lines.clear()
-            self.update_canvas_selection()
-            self.canvas.draw_idle()
-
-    def get_pois(self, gds, temp_ox=None, temp_oy=None):
-        t_box = gds['trans'] * gds['base_bbox']
-        ox, oy = (gds['offset_x'] if temp_ox is None else temp_ox), (gds['offset_y'] if temp_oy is None else temp_oy)
-        return [t_box.left + ox, t_box.right + ox, (t_box.left + t_box.right) / 2 + ox], \
-            [t_box.bottom + oy, t_box.top + oy, (t_box.bottom + t_box.top) / 2 + oy]
+            cx, cy = self.get_anchor_coords(handle_gds, self.cb_anchor.currentText())
+            self.inp_x.setText(f"{cx:.3f}");
+            self.inp_y.setText(f"{cy:.3f}")
 
     def show_context_menu(self, idx):
         menu = QtWidgets.QMenu(self)
@@ -1634,82 +1719,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         elif action == a_fv:
             self.action_flip_vertical(idx)
 
-    def action_duplicate(self, idx):
-        self.save_snapshot()
-        o = self.gds_list[idx]
-        self.gds_list.append(
-            {'path': o['path'], 'name': o['name'], 'base_bbox': o['base_bbox'], 'trans': o['trans'] * db.DTrans(),
-             'offset_x': o['offset_x'] + 200, 'offset_y': o['offset_y'] - 200, 'color': o['color'], 'patch': None,
-             'shadow_patch': None, 'collection': None, 'center_text': None, 'true_polygons': o['true_polygons'],
-             'layers': o.get('layers', [])})
-        self.list_widget.addItem(f"[{len(self.gds_list)}] {o['name']}")
-        self.draw_preview()
-
-    def action_create_array(self, idx):
-        dlg = QtWidgets.QDialog(self)
-        dlg.setWindowTitle("Create Array")
-        layout = QtWidgets.QFormLayout(dlg)
-        rows_var = QtWidgets.QLineEdit("2")
-        cols_var = QtWidgets.QLineEdit("2")
-        spc_x_var = QtWidgets.QLineEdit("1000")
-        spc_y_var = QtWidgets.QLineEdit("1000")
-        layout.addRow("Rows (Y):", rows_var)
-        layout.addRow("Cols (X):", cols_var)
-        layout.addRow("Space X (um):", spc_x_var)
-        layout.addRow("Space Y (um):", spc_y_var)
-        btn = QtWidgets.QPushButton("Generate Array")
-        btn.clicked.connect(dlg.accept)
-        layout.addRow(btn)
-
-        if dlg.exec_():
-            try:
-                r, c, sx, sy = int(rows_var.text()), int(cols_var.text()), float(spc_x_var.text()), float(
-                    spc_y_var.text())
-                if r < 1 or c < 1: return
-                self.save_snapshot()
-                o = self.gds_list[idx]
-                for i in range(r):
-                    for j in range(c):
-                        if i == 0 and j == 0: continue
-                        self.gds_list.append(
-                            {'path': o['path'], 'name': f"{o['name']}_R{i}C{j}", 'base_bbox': o['base_bbox'],
-                             'trans': o['trans'] * db.DTrans(), 'offset_x': o['offset_x'] + j * sx,
-                             'offset_y': o['offset_y'] + i * sy, 'color': o['color'], 'patch': None,
-                             'shadow_patch': None, 'collection': None,
-                             'center_text': None, 'true_polygons': o['true_polygons'], 'layers': o.get('layers', [])})
-                        self.list_widget.addItem(f"[{len(self.gds_list)}] {self.gds_list[-1]['name']}")
-                self.draw_preview()
-            except ValueError:
-                pass
-
-    def action_rotate_ccw(self, i):
-        self.save_snapshot();
-        self.gds_list[i]['trans'] = db.DTrans(1, False, 0, 0) * self.gds_list[i][
-            'trans'];
-        self.draw_preview();
-        self.on_listbox_select()
-
-    def action_rotate_cw(self, i):
-        self.save_snapshot();
-        self.gds_list[i]['trans'] = db.DTrans(3, False, 0, 0) * self.gds_list[i][
-            'trans'];
-        self.draw_preview();
-        self.on_listbox_select()
-
-    def action_flip_horizontal(self, i):
-        self.save_snapshot();
-        self.gds_list[i]['trans'] = db.DTrans(2, True, 0, 0) * self.gds_list[i][
-            'trans'];
-        self.draw_preview();
-        self.on_listbox_select()
-
-    def action_flip_vertical(self, i):
-        self.save_snapshot();
-        self.gds_list[i]['trans'] = db.DTrans(0, True, 0, 0) * self.gds_list[i][
-            'trans'];
-        self.draw_preview();
-        self.on_listbox_select()
-
+    # ================= KLayout 核心操作与布尔运算 =================
     def execute_stitch(self):
         if not self.gds_list: return
         out_p, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Save GDS", "", "GDS Files (*.gds)")
@@ -1727,7 +1737,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 if file_path not in cache:
                     if not os.path.exists(file_path):
                         QtWidgets.QMessageBox.warning(self, "Missing", f"Missing GDS:\n{file_path}")
-                        cache[file_path] = None
+                        cache[file_path] = None;
                         continue
                     src_layout = db.Layout()
                     src_layout.read(file_path)
@@ -1774,24 +1784,22 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                     lyr_idx = target_layout.layer(db.LayerInfo(int(s['layer']), int(s['dt'])))
                     pts = s['points']
                     if s['type'] == 'box':
-                        d_box = db.DBox(min(pts[0][0], pts[1][0]), min(pts[0][1], pts[1][1]), max(pts[0][0], pts[1][0]),
-                                        max(pts[0][1], pts[1][1]))
-                        merged_top.shapes(lyr_idx).insert(d_box)
+                        merged_top.shapes(lyr_idx).insert(
+                            db.DBox(min(pts[0][0], pts[1][0]), min(pts[0][1], pts[1][1]), max(pts[0][0], pts[1][0]),
+                                    max(pts[0][1], pts[1][1])))
                     elif s['type'] == 'polygon':
-                        d_poly = db.DPolygon([db.DPoint(x, y) for x, y in pts])
-                        merged_top.shapes(lyr_idx).insert(d_poly)
+                        merged_top.shapes(lyr_idx).insert(db.DPolygon([db.DPoint(x, y) for x, y in pts]))
                     elif s['type'] == 'path':
-                        d_path = db.DPath([db.DPoint(x, y) for x, y in pts], s['width'])
-                        merged_top.shapes(lyr_idx).insert(d_path)
+                        merged_top.shapes(lyr_idx).insert(db.DPath([db.DPoint(x, y) for x, y in pts], s['width']))
                     elif s['type'] == 'via_array':
                         vw_dbu, vh_dbu = int(s['via_w'] / dbu), int(s['via_h'] / dbu)
                         px_dbu, py_dbu = int(s['pitch_x'] / dbu), int(s['pitch_y'] / dbu)
                         if px_dbu > 0 and py_dbu > 0 and vw_dbu > 0 and vh_dbu > 0:
-                            min_x, min_y = min(pts[0][0], pts[1][0]), min(pts[0][1], pts[1][1])
-                            max_x, max_y = max(pts[0][0], pts[1][0]), max(pts[0][1], pts[1][1])
-                            min_x_dbu, min_y_dbu = int(min_x / dbu), int(min_y / dbu)
-                            max_x_dbu, max_y_dbu = int(max_x / dbu), int(max_y / dbu)
-                            via_region = db.Region()
+                            min_x_dbu, min_y_dbu = int(min(pts[0][0], pts[1][0]) / dbu), int(
+                                min(pts[0][1], pts[1][1]) / dbu)
+                            max_x_dbu, max_y_dbu = int(max(pts[0][0], pts[1][0]) / dbu), int(
+                                max(pts[0][1], pts[1][1]) / dbu)
+                            via_region = db.Region();
                             curr_x = min_x_dbu
                             while curr_x + vw_dbu <= max_x_dbu:
                                 curr_y = min_y_dbu
@@ -1809,18 +1817,17 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                     if text_region.bbox().height() > 0:
                         text_cell = target_layout.create_cell(f"TEXT_{ut['text']}")
                         text_cell.shapes(lbl_idx).insert(text_region)
-                        _ = text_cell.bbox()
                         current_h_um = text_region.bbox().height() * dbu
                         scale_factor = ut['size'] / current_h_um if current_h_um > 0 else 1.0
-                        t = db.DCplxTrans(scale_factor, 0, False, ut['x'], ut['y'])
-                        merged_top.insert(db.DCellInstArray(text_cell.cell_index(), t))
+                        merged_top.insert(db.DCellInstArray(text_cell.cell_index(),
+                                                            db.DCplxTrans(scale_factor, 0, False, ut['x'], ut['y'])))
 
             if self.chk_dummy.isChecked():
                 layer_idx = target_layout.layer(db.LayerInfo(int(self.inp_dlyr.text()), int(self.inp_ddt.text())))
                 size_um, space_um, margin_um = float(self.inp_dsize.text()), float(self.inp_dspc.text()), float(
                     self.inp_dmargin.text())
                 keep_out = db.Region(merged_top.begin_shapes_rec(layer_idx))
-                keep_out.size(int(margin_um / dbu))
+                keep_out.size(int(margin_um / dbu));
                 keep_out.merge()
 
                 dummy_region = db.Region()
@@ -1830,22 +1837,19 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 y, row_index = 0, 0
                 stagger = self.chk_stagger.isChecked()
                 while y + box_size_dbu <= h_dbu:
-                    x_offset = int(box_pitch_dbu / 2) if stagger and (row_index % 2 != 0) else 0
-                    x = x_offset
+                    x = int(box_pitch_dbu / 2) if stagger and (row_index % 2 != 0) else 0
                     while x + box_size_dbu <= w_dbu:
-                        dummy_region.insert(db.Box(x, y, x + box_size_dbu, y + box_size_dbu))
+                        dummy_region.insert(db.Box(x, y, x + box_size_dbu, y + box_size_dbu));
                         x += box_pitch_dbu
-                    y += box_pitch_dbu
+                    y += box_pitch_dbu;
                     row_index += 1
-
                 merged_top.shapes(layer_idx).insert(dummy_region - dummy_region.interacting(keep_out))
 
             if self.crop_box:
-                _ = merged_top.bbox()
                 pts = self.crop_box
-                min_x, min_y = min(pts[0][0], pts[1][0]), min(pts[0][1], pts[1][1])
-                max_x, max_y = max(pts[0][0], pts[1][0]), max(pts[0][1], pts[1][1])
-                clip_box_dbu = db.Box(int(min_x / dbu), int(min_y / dbu), int(max_x / dbu), int(max_y / dbu))
+                min_x_dbu, min_y_dbu = int(min(pts[0][0], pts[1][0]) / dbu), int(min(pts[0][1], pts[1][1]) / dbu)
+                max_x_dbu, max_y_dbu = int(max(pts[0][0], pts[1][0]) / dbu), int(max(pts[0][1], pts[1][1]) / dbu)
+                clip_box_dbu = db.Box(min_x_dbu, min_y_dbu, max_x_dbu, max_y_dbu)
                 clipped_cell_idx = target_layout.clip(merged_top.cell_index(), clip_box_dbu)
                 merged_top = target_layout.cell(clipped_cell_idx)
                 merged_top.name = self.inp_topname.text() or "MERGED"
@@ -1856,7 +1860,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             save_opt = db.SaveLayoutOptions()
             save_opt.add_cell(merged_top.cell_index())
             target_layout.write(out_p, save_opt)
-
             self.status_label.setText("Ready")
             QtWidgets.QMessageBox.information(self, "OK", "导出合并成功！")
 
@@ -1890,9 +1893,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         out_lay = QtWidgets.QLineEdit("100/0")
         out_name = QtWidgets.QLineEdit("BOOLEAN_RESULT")
 
-        if len(all_sources) > 1:
-            cb_a.setCurrentIndex(0)
-            cb_b.setCurrentIndex(1)
+        if len(all_sources) > 1: cb_a.setCurrentIndex(0); cb_b.setCurrentIndex(1)
 
         layout.addRow("源 A (选择器件或形状):", cb_a)
         layout.addRow("源 A 层号 (选 GDS 时生效):", lay_a)
@@ -1917,34 +1918,33 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 idx_a, idx_b = cb_a.currentIndex(), cb_b.currentIndex()
 
                 def parse_lyr(text):
-                    parts = text.split('/')
+                    parts = text.split('/');
                     return int(parts[0]), int(parts[1]) if len(parts) > 1 else 0
 
-                la, dta = parse_lyr(lay_a.text())
-                lb, dtb = parse_lyr(lay_b.text())
+                la, dta = parse_lyr(lay_a.text());
+                lb, dtb = parse_lyr(lay_b.text());
                 lo, dto = parse_lyr(out_lay.text())
                 op_idx = cb_op.currentIndex()
 
                 target_dbu = 0.001
                 if self.gds_list:
-                    test_layout = db.Layout()
-                    test_layout.read(self.gds_list[0]['path'])
+                    test_layout = db.Layout();
+                    test_layout.read(self.gds_list[0]['path']);
                     target_dbu = test_layout.dbu
 
                 reg_a = self.extract_region_for_boolean(idx_a, la, dta, target_dbu)
                 reg_b = self.extract_region_for_boolean(idx_b, lb, dtb, target_dbu)
 
                 if op_idx == 0:
-                    res_reg = reg_a + reg_b  # OR
+                    res_reg = reg_a + reg_b
                 elif op_idx == 1:
-                    res_reg = reg_a & reg_b  # AND
+                    res_reg = reg_a & reg_b
                 elif op_idx == 2:
-                    res_reg = reg_a - reg_b  # NOT
+                    res_reg = reg_a - reg_b
                 elif op_idx == 3:
-                    res_reg = reg_a ^ reg_b  # XOR
+                    res_reg = reg_a ^ reg_b
 
                 res_reg.merge()
-
                 if res_reg.is_empty():
                     self.status_label.setText("Ready")
                     QtWidgets.QMessageBox.information(self, "Result",
@@ -1952,7 +1952,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                     return
 
                 temp_path = os.path.join(tempfile.gettempdir(), f"{out_name.text()}.gds")
-                out_layout = db.Layout()
+                out_layout = db.Layout();
                 out_layout.dbu = target_dbu
 
                 out_top = out_layout.create_cell(out_name.text())
@@ -1962,8 +1962,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
 
                 self.process_single_gds(temp_path)
                 self.status_label.setText("布尔运算完成！已作为新器件加载。")
-                self.draw_preview()
-
             except Exception as e:
                 self.status_label.setText("Ready")
                 QtWidgets.QMessageBox.critical(self, "Error", f"布尔运算失败:\n{str(e)}")
@@ -1978,9 +1976,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             layout.read(gds_info['path'])
             top_cell = layout.top_cells()[0]
             li = layout.find_layer(layer, datatype)
-
-            if li is not None:
-                reg.insert(top_cell.begin_shapes_rec(li))
+            if li is not None: reg.insert(top_cell.begin_shapes_rec(li))
             reg.merge()
 
             dx_dbu = round((gds_info['trans'].disp.x + gds_info['offset_x']) / dbu)
@@ -1988,39 +1984,32 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             i_trans = db.Trans(gds_info['trans'].rot, gds_info['trans'].is_mirror(), dx_dbu, dy_dbu)
             reg.transform(i_trans)
             return reg
-
         else:
             shape_idx = global_idx - num_gds
             s = self.user_shapes[shape_idx]
             pts = s['points']
-
             if s['type'] == 'box':
                 min_x, min_y = min(pts[0][0], pts[1][0]), min(pts[0][1], pts[1][1])
                 max_x, max_y = max(pts[0][0], pts[1][0]), max(pts[0][1], pts[1][1])
                 reg.insert(db.Box(int(min_x / dbu), int(min_y / dbu), int(max_x / dbu), int(max_y / dbu)))
-
             elif s['type'] == 'polygon':
                 pts_dbu = [db.Point(int(x / dbu), int(y / dbu)) for x, y in pts]
                 reg.insert(db.Polygon(pts_dbu))
-
             elif s['type'] == 'path':
                 pts_dbu = [db.Point(int(x / dbu), int(y / dbu)) for x, y in pts]
                 w_dbu = int(s['width'] / dbu)
                 reg.insert(db.Path(pts_dbu, w_dbu).polygon())
-
             elif s['type'] == 'via_array':
                 vw_dbu, vh_dbu = int(s['via_w'] / dbu), int(s['via_h'] / dbu)
                 px_dbu, py_dbu = int(s['pitch_x'] / dbu), int(s['pitch_y'] / dbu)
                 if px_dbu > 0 and py_dbu > 0 and vw_dbu > 0 and vh_dbu > 0:
-                    min_x, min_y = min(pts[0][0], pts[1][0]), min(pts[0][1], pts[1][1])
-                    max_x, max_y = max(pts[0][0], pts[1][0]), max(pts[0][1], pts[1][1])
-                    min_x_dbu, min_y_dbu = int(min_x / dbu), int(min_y / dbu)
-                    max_x_dbu, max_y_dbu = int(max_x / dbu), int(max_y / dbu)
+                    min_x_dbu, min_y_dbu = int(min(pts[0][0], pts[1][0]) / dbu), int(min(pts[0][1], pts[1][1]) / dbu)
+                    max_x_dbu, max_y_dbu = int(max(pts[0][0], pts[1][0]) / dbu), int(max(pts[0][1], pts[1][1]) / dbu)
                     curr_x = min_x_dbu
                     while curr_x + vw_dbu <= max_x_dbu:
                         curr_y = min_y_dbu
                         while curr_y + vh_dbu <= max_y_dbu:
-                            reg.insert(db.Box(curr_x, curr_y, curr_x + vw_dbu, curr_y + vh_dbu))
+                            reg.insert(db.Box(curr_x, curr_y, curr_x + vw_dbu, curr_y + vh_dbu));
                             curr_y += py_dbu
                         curr_x += px_dbu
             reg.merge()
