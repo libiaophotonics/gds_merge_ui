@@ -6,7 +6,7 @@ import subprocess
 def main():
     # ⚠️ 确保你刚才写的带有 UI 的主程序文件名为 "merge_gds_ui.py"
     target_script = "merge_gds_ui.py"
-    app_name = "WaferForge_GDS_Assembler"  # 更新了更酷的软件名
+    app_name = "GDS_Assembler"  # 更新了更酷的软件名
     icon_png = "icon.png"
     icon_ico = "icon.ico"
 

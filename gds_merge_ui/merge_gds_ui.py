@@ -109,7 +109,7 @@ class GDSViewBox(pg.ViewBox):
 class GDSMergerProQt(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("WaferForge GDS Assembler - Professional Edition V6")
+        self.setWindowTitle("GDS Assembler")
         self.resize(1400, 850)
         self.setAcceptDrops(True)
 
