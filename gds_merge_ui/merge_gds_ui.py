@@ -105,7 +105,7 @@ class GDSViewBox(pg.ViewBox):
 class GDSMergerProQt(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("WaferForge GDS Assembler - Professional Edition V2")
+        self.setWindowTitle("WaferForge GDS Assembler - Professional Edition V3")
         self.resize(1400, 850)
         self.setAcceptDrops(True)
 
@@ -122,6 +122,10 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
 
         self.dragging_type, self.dragging_idx = None, -1
         self.active_shape_type, self.active_shape_idx = None, -1
+
+        # ================= 新增边缘拖拽状态 =================
+        self.dragging_edge = None
+
         self.drag_start_x = self.drag_start_y = self.rect_start_x = self.rect_start_y = 0
         self.drag_start_offsets = {}
         self.drag_snapshot_taken = False
@@ -138,7 +142,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
 
         self.setup_ui()
         self.draw_preview(reset_view=True)
-        self.save_snapshot()  # 保存初始状态
+        self.save_snapshot()
 
     def keyPressEvent(self, event):
         if event.key() in [QtCore.Qt.Key_Control, QtCore.Qt.Key_Meta]:
@@ -265,7 +269,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
 
         grp_seal = QtWidgets.QGroupBox("2. Seal Ring")
         f_seal = QtWidgets.QFormLayout(grp_seal)
-        self.chk_seal = QtWidgets.QCheckBox("Enable Seal Ring");
+        self.chk_seal = QtWidgets.QCheckBox("Enable Seal Ring")
         f_seal.addRow(self.chk_seal)
         h_s1 = QtWidgets.QHBoxLayout();
         self.inp_slyr = QtWidgets.QLineEdit("10");
@@ -387,7 +391,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
 
         view_box = GDSViewBox(self)
         self.canvas = pg.PlotWidget(viewBox=view_box)
-        # ================= 新增：动态智能网格 =================
         self.grid = pg.GridItem()
         self.canvas.addItem(self.grid)
         self.canvas.setAspectLocked(True)
@@ -411,7 +414,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         l_layout.addWidget(self.layer_list)
         right_layout.addWidget(grp_layers, 1)
 
-        # ================= 新增：动态属性检查器 =================
         grp_props = QtWidgets.QGroupBox("📌 Property Inspector")
         props_layout = QtWidgets.QFormLayout(grp_props)
         self.prop_type_lbl = QtWidgets.QLabel("-");
@@ -619,7 +621,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
 
     # ================= 极致内存优化的 Undo/Redo 核心 =================
     def create_snapshot_dict(self):
-        # 抛弃深拷贝重物体，仅记录坐标字典和引用，速度极快内存为0
         clean_texts = [{k: v for k, v in t.items() if k != 'text_obj'} for t in self.user_texts]
         clean_shapes = [{k: v for k, v in s.items() if k != 'patch'} for s in self.user_shapes]
         snapshot = {
@@ -634,7 +635,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 'path': gds['path'], 'name': gds['name'], 'base_bbox': gds['base_bbox'],
                 'trans': gds['trans'] * db.DTrans(), 'offset_x': gds['offset_x'], 'offset_y': gds['offset_y'],
                 'color': gds['color'], 'true_polygons': gds['true_polygons'], 'layers': gds.get('layers', []),
-                'qpath': gds.get('qpath')  # 核心：保留底层C++渲染轮廓的引用，不要重建！
+                'qpath': gds.get('qpath')
             }
             snapshot['gds_list'].append(snap_gds)
         return snapshot
@@ -688,7 +689,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
     def process_single_gds(self, filepath):
         self.status_label.setText(f"⏳ 正在后台极速解析: {os.path.basename(filepath)} ...")
         QtWidgets.QApplication.processEvents()
-
         worker = GDSLoadWorker(filepath)
         worker.result_ready.connect(self.on_gds_loaded)
         worker.error_occurred.connect(self.on_gds_load_error)
@@ -706,7 +706,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         true_polygons = result['true_polygons']
         layers = result['layers']
 
-        # 后台预先计算 QPainterPath 以实现 0 毫秒渲染
         path = QtGui.QPainterPath()
         if true_polygons:
             for poly in true_polygons:
@@ -824,7 +823,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Error", str(e))
 
-    # 双击依然保留对话框以防需要，但主推属性检查器
     def edit_text_dialog(self, idx):
         self.active_shape_type = 'text';
         self.active_shape_idx = idx
@@ -939,7 +937,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 self.draw_points = []
                 self.btn_measure.setChecked(False)
                 self.status_label.setText(
-                    f"{shape_type.capitalize()} Mode active. (拖拽 或 点击 两下绘制Box；单击连线，右键完成Polygon/Path)")
+                    f"{shape_type.capitalize()} Mode active. (拖拽或点击两下绘制Box；单击连线，右键完成Polygon/Path)")
             except ValueError:
                 pass
 
@@ -967,13 +965,11 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             if gds.get('patch'):
                 if i in selected_indices:
                     if 'shadow_patch' in gds and gds['shadow_patch']: gds['shadow_patch'].setOpacity(0.6)
-
                     shadow = QtWidgets.QGraphicsDropShadowEffect()
                     shadow.setBlurRadius(15);
                     shadow.setColor(QtGui.QColor('#00FFFF'));
                     shadow.setOffset(0, 0)
                     gds['patch'].setGraphicsEffect(shadow)
-
                     gds['patch'].setBrush(pg.mkBrush(QtGui.QColor(gds['color']).lighter(130).name() + '80'))
                     gds['patch'].setPen(pg.mkPen('#00FFFF', width=3))
                     if gds.get('collection'): gds['collection'].setPen(pg.mkPen('#00FFFF', width=2))
@@ -1000,6 +996,12 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                     if s['type'] == 'polygon': ec = '#32CD32'
                     if s['type'] == 'path': ec = '#9370DB'
                     s['patch'].setPen(pg.mkPen(ec, width=2 if s['type'] in ['box', 'via_array'] else 1))
+
+        if getattr(self, 'crop_rect_item', None):
+            if self.active_shape_type == 'crop':
+                self.crop_rect_item.setPen(pg.mkPen('#00FFFF', width=3, style=QtCore.Qt.DashLine))
+            else:
+                self.crop_rect_item.setPen(pg.mkPen('r', width=3, style=QtCore.Qt.DashLine))
 
         self.populate_inspector()
 
@@ -1123,6 +1125,8 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         self.save_snapshot()
         self.measurements.clear()
         self.clear_active_measurement()
+        self.active_shape_type = None
+        self.active_shape_idx = -1
         self.btn_measure.setChecked(False)
         self.draw_preview(reset_view=False)
 
@@ -1219,6 +1223,14 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             self.draw_preview(reset_view=False)
             return
 
+        if getattr(self, 'active_shape_type', None) == 'crop':
+            self.save_snapshot()
+            self.crop_box = None
+            self.active_shape_type = None;
+            self.active_shape_idx = -1
+            self.draw_preview(reset_view=False)
+            return
+
         selection = sorted([self.list_widget.row(item) for item in self.list_widget.selectedItems()], reverse=True)
         if selection:
             self.save_snapshot()
@@ -1253,14 +1265,14 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         self.clear_active_measurement()
 
         if self.is_dark_mode:
-            bg_pen_color = '#555555'
+            bg_pen_color = '#555555';
             bg_brush_color = (25, 25, 25, 150)
             origin_pen = 'w';
             origin_brush = 'w'
             no_gds_color = '#bbbbbb';
             shadow_color = (0, 0, 0, 150)
         else:
-            bg_pen_color = '#888888'
+            bg_pen_color = '#888888';
             bg_brush_color = (240, 240, 240, 200)
             origin_pen = '#555555';
             origin_brush = '#888888'
@@ -1290,7 +1302,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
 
             shadow_rect = QtWidgets.QGraphicsRectItem(sx + shadow_offset, sy - shadow_offset, w, h)
             shadow_rect.setBrush(pg.mkBrush(*shadow_color))
-            shadow_rect.setPen(pg.mkPen(None))
+            shadow_rect.setPen(pg.mkPen(None));
             shadow_rect.setOpacity(0.0)
             shadow_rect.setZValue(8)
             self.canvas.addItem(shadow_rect)
@@ -1305,7 +1317,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
 
             gds['collection'] = None
             if not self.btn_bbox.isChecked() and gds.get('qpath'):
-                # 瞬间加载 QPainterPath，不再遍历顶点！
                 path_item = QtWidgets.QGraphicsPathItem(gds['qpath'])
                 path_item.setBrush(pg.mkBrush(0, 0, 0, 150))
                 path_item.setPen(pg.mkPen(gds['color'], width=1))
@@ -1316,7 +1327,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 tr.rotate(gds['trans'].rot * 90.0)
                 if gds['trans'].is_mirror(): tr.scale(1.0, -1.0)
                 path_item.setTransform(tr)
-
                 path_item.setZValue(15)
                 self.canvas.addItem(path_item)
                 gds['collection'] = path_item
@@ -1331,7 +1341,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             line = QtWidgets.QGraphicsLineItem(m['x0'], m['y0'], m['x1'], m['y1'])
             line.setPen(pg.mkPen('#FF8800', width=2, style=QtCore.Qt.DashLine))
             self.canvas.addItem(line)
-
             info = f"L: {math.hypot(m['x1'] - m['x0'], m['y1'] - m['y0']):.2f}\ndx: {abs(m['x1'] - m['x0']):.2f}\ndy: {abs(m['y1'] - m['y0']):.2f}"
             t = pg.TextItem(info, color='#FFFF00', anchor=(0, 1), fill=pg.mkBrush(0, 0, 0, 200))
             t.setPos(m['x1'], m['y1'])
@@ -1352,7 +1361,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 x0, y0 = pts[0];
                 x1, y1 = pts[1]
                 rect = QtWidgets.QGraphicsRectItem(min(x0, x1), min(y0, y1), abs(x1 - x0), abs(y1 - y0))
-
                 if s['type'] == 'box':
                     rect.setBrush(pg.mkBrush(220, 110, 0, 80))
                     rect.setPen(pg.mkPen('#CC6600', width=2))
@@ -1404,6 +1412,37 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             self.canvas.setXRange(-self.block_w * 0.1, self.block_w * 1.1, padding=0)
             self.canvas.setYRange(-self.block_h * 0.1, self.block_h * 1.1, padding=0)
 
+    # ================= 边缘检测核心算法 =================
+    def check_edge_hit(self, x, y):
+        # 动态计算屏幕像素映射到的物理容差 (吸附边缘的范围)
+        px_x, px_y = self.canvas.plotItem.vb.viewPixelSize()
+        tol_x, tol_y = px_x * 8, px_y * 8
+
+        # 优先检测 Crop 框边缘
+        if self.crop_box and getattr(self, 'active_shape_type', None) == 'crop':
+            edge = self._get_edge(x, y, self.crop_box, tol_x, tol_y)
+            if edge: return 'crop', -1, edge
+
+        # 检测激活的 Box 或 ViaArray 的边缘
+        if getattr(self, 'active_shape_type', None) == 'shape' and self.active_shape_idx != -1:
+            s = self.user_shapes[self.active_shape_idx]
+            if s['type'] in ['box', 'via_array']:
+                edge = self._get_edge(x, y, s['points'], tol_x, tol_y)
+                if edge: return 'shape', self.active_shape_idx, edge
+
+        return None, -1, None
+
+    def _get_edge(self, x, y, pts, tol_x, tol_y):
+        x0, y0 = min(pts[0][0], pts[1][0]), min(pts[0][1], pts[1][1])
+        x1, y1 = max(pts[0][0], pts[1][0]), max(pts[0][1], pts[1][1])
+        if y0 - tol_y <= y <= y1 + tol_y:
+            if abs(x - x0) <= tol_x: return 'left'
+            if abs(x - x1) <= tol_x: return 'right'
+        if x0 - tol_x <= x <= x1 + tol_x:
+            if abs(y - y0) <= tol_y: return 'bottom'
+            if abs(y - y1) <= tol_y: return 'top'
+        return None
+
     def is_hit(self, x, y, item):
         if not item: return False
         pt = QtCore.QPointF(x, y)
@@ -1411,13 +1450,13 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             return item.contains(pt)
         scene_pt = self.canvas.plotItem.vb.mapViewToScene(pt)
         local_pt = item.mapFromScene(scene_pt)
-        if isinstance(item, pg.TextItem): return item.boundingRect().contains(local_pt)
+        if isinstance(item, pg.TextItem):
+            return item.boundingRect().contains(local_pt)
         return item.contains(local_pt)
 
     def get_snapped_coordinate(self, x, y):
         view_range = self.canvas.viewRange()
         cur_xlim, cur_ylim = view_range[0], view_range[1]
-
         best_x, best_y = x, y
         min_dx, min_dy = (cur_xlim[1] - cur_xlim[0]) * 0.02, (cur_ylim[1] - cur_ylim[0]) * 0.02
         snapped_x, snapped_y = False, False
@@ -1450,6 +1489,27 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             self.user_shapes.append(new_shape)
         self.cancel_draw_mode()
         self.draw_preview(reset_view=False)
+
+    # ================== 核心：鼠标事件与边缘拖拽 ==================
+    def handle_mouse_doubleclick(self, x, y):
+        for i in range(len(self.user_texts) - 1, -1, -1):
+            if 'text_obj' in self.user_texts[i] and self.is_hit(x, y, self.user_texts[i]['text_obj']):
+                self.edit_text_dialog(i);
+                return
+        for i in range(len(self.user_shapes) - 1, -1, -1):
+            if 'patch' in self.user_shapes[i] and self.is_hit(x, y, self.user_shapes[i]['patch']):
+                self.edit_shape_dialog(i);
+                return
+
+        if getattr(self, 'crop_rect_item', None) and self.is_hit(x, y, self.crop_rect_item):
+            self.edit_crop_dialog()
+            return
+
+        if self.draw_mode in ['polygon', 'path']:
+            if len(self.draw_points) >= (3 if self.draw_mode == 'polygon' else 2):
+                self.finalize_shape()
+            else:
+                self.cancel_draw_mode()
 
     def handle_mouse_click(self, x, y, is_double=False, button=QtCore.Qt.LeftButton):
         if button == QtCore.Qt.RightButton:
@@ -1514,6 +1574,20 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             self.draw_points.append((snap_x, snap_y))
             return
         if self.draw_mode is not None or self.btn_measure.isChecked(): return
+
+        # 拖拽开始时，检测是否捏住了边缘
+        hit_type, idx, edge = self.check_edge_hit(x, y)
+        if hit_type:
+            self.dragging_edge = edge
+            self.dragging_type = hit_type + "_edge"
+            self.dragging_idx = idx
+            self.drag_start_x, self.drag_start_y = x, y
+            if hit_type == 'crop':
+                self.drag_start_offsets = list(self.crop_box)
+            else:
+                self.drag_start_offsets = list(self.user_shapes[idx]['points'])
+            return
+
         self._process_selection_at(x, y, prepare_drag=True)
 
     def _process_selection_at(self, x, y, prepare_drag=False):
@@ -1546,6 +1620,20 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                     self.drag_start_x, self.drag_start_y = x, y
                     self.drag_start_offsets = list(self.user_shapes[i]['points'])
                 return
+
+        if getattr(self, 'crop_rect_item', None) and self.is_hit(x, y, self.crop_rect_item):
+            self.active_shape_type = 'crop';
+            self.active_shape_idx = -1
+            self.list_widget.blockSignals(True);
+            self.list_widget.clearSelection();
+            self.list_widget.blockSignals(False)
+            self.update_canvas_selection()
+            if prepare_drag:
+                self.dragging_type = 'crop';
+                self.dragging_idx = -1
+                self.drag_start_x, self.drag_start_y = x, y
+                self.drag_start_offsets = list(self.crop_box)
+            return
 
         clicked_idx = next(
             (i for i in range(len(self.gds_list) - 1, -1, -1) if self.is_hit(x, y, self.gds_list[i]['patch'])), -1)
@@ -1598,13 +1686,16 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             return
 
         if self.dragging_type is not None:
+            # 清除拖拽和边缘缩放状态
             self.dragging_type = None;
-            self.dragging_idx = -1
+            self.dragging_idx = -1;
+            self.dragging_edge = None
             self.drag_snapshot_taken = False;
             self.drag_start_offsets.clear()
             for line in self.guide_lines: self.canvas.removeItem(line)
             self.guide_lines.clear()
             self.update_canvas_selection()
+            self.canvas.setCursor(QtCore.Qt.ArrowCursor)
 
     def handle_mouse_move(self, x, y):
         snap_x, snap_y, sn_x, sn_y = self.get_snapped_coordinate(x, y)
@@ -1613,6 +1704,16 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 snap_x, snap_y = self.apply_ortho(snap_x, snap_y, self.measure_start_pt)
             elif self.draw_mode in ['polygon', 'path'] and self.draw_points:
                 snap_x, snap_y = self.apply_ortho(snap_x, snap_y, self.draw_points[-1])
+
+        # ==== 鼠标悬停显示边缘调节光标 ====
+        if self.dragging_type is None and self.draw_mode is None and not self.btn_measure.isChecked():
+            hit_type, _, edge = self.check_edge_hit(x, y)
+            if edge in ['left', 'right']:
+                self.canvas.setCursor(QtCore.Qt.SizeHorCursor)
+            elif edge in ['top', 'bottom']:
+                self.canvas.setCursor(QtCore.Qt.SizeVerCursor)
+            else:
+                self.canvas.setCursor(QtCore.Qt.ArrowCursor)
 
         if self.draw_mode is not None:
             if self.draw_mode == 'text':
@@ -1689,6 +1790,40 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         dx_raw = x - self.drag_start_x
         dy_raw = y - self.drag_start_y
 
+        # ==== 边缘拉伸逻辑 ====
+        if self.dragging_edge:
+            orig_pts = self.drag_start_offsets
+            x0, x1 = min(orig_pts[0][0], orig_pts[1][0]), max(orig_pts[0][0], orig_pts[1][0])
+            y0, y1 = min(orig_pts[0][1], orig_pts[1][1]), max(orig_pts[0][1], orig_pts[1][1])
+
+            if self.dragging_edge == 'left':
+                x0 = snap_x
+            elif self.dragging_edge == 'right':
+                x1 = snap_x
+            elif self.dragging_edge == 'bottom':
+                y0 = snap_y
+            elif self.dragging_edge == 'top':
+                y1 = snap_y
+
+            new_pts = [(x0, y0), (x1, y1)]
+            min_x, max_x = min(x0, x1), max(x0, x1)
+            min_y, max_y = min(y0, y1), max(y0, y1)
+
+            if self.dragging_type == 'crop_edge':
+                self.crop_box = new_pts
+                if self.crop_rect_item:
+                    self.crop_rect_item.setRect(min_x, min_y, max_x - min_x, max_y - min_y)
+            elif self.dragging_type == 'shape_edge':
+                s = self.user_shapes[self.dragging_idx]
+                s['points'] = new_pts
+                s['patch'].setRect(min_x, min_y, max_x - min_x, max_y - min_y)
+                if self.active_shape_idx == self.dragging_idx:
+                    self.prop_x_inp.setText(f"{min_x:.3f}");
+                    self.prop_y_inp.setText(f"{min_y:.3f}")
+                    self.prop_w_inp.setText(f"{max_x - min_x:.3f}");
+                    self.prop_h_inp.setText(f"{max_y - min_y:.3f}")
+            return
+
         if self.dragging_type == 'text':
             nx, ny = self.rect_start_x + dx_raw, self.rect_start_y + dy_raw
             if self.chk_snap.isChecked():
@@ -1703,7 +1838,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             path = self.create_text_path(ut['text'], ut['size'], nx, ny)
             ut['text_obj'].setPath(path)
 
-            # 实时更新属性面板
             if self.active_shape_type == 'text':
                 self.prop_x_inp.setText(f"{nx:.3f}");
                 self.prop_y_inp.setText(f"{ny:.3f}")
@@ -1738,6 +1872,24 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             if self.active_shape_type == 'shape':
                 self.prop_x_inp.setText(f"{min(x0, x1) if s['type'] in ['box', 'via_array'] else new_pts[0][0]:.3f}")
                 self.prop_y_inp.setText(f"{min(y0, y1) if s['type'] in ['box', 'via_array'] else new_pts[0][1]:.3f}")
+            return
+
+        if self.dragging_type == 'crop':
+            dx, dy = dx_raw, dy_raw
+            if self.chk_snap.isChecked():
+                try:
+                    g_size = float(self.inp_snap.text())
+                    base_px, base_py = self.drag_start_offsets[0]
+                    nx, ny = round((base_px + dx) / g_size) * g_size, round((base_py + dy) / g_size) * g_size
+                    dx, dy = nx - base_px, ny - base_py
+                except ValueError:
+                    pass
+            new_pts = [(ox + dx, oy + dy) for ox, oy in self.drag_start_offsets]
+            self.crop_box = new_pts
+            if self.crop_rect_item:
+                x0, y0 = new_pts[0];
+                x1, y1 = new_pts[1]
+                self.crop_rect_item.setRect(min(x0, x1), min(y0, y1), abs(x1 - x0), abs(y1 - y0))
             return
 
         for line in self.guide_lines: self.canvas.removeItem(line)
@@ -1816,13 +1968,14 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 gds['collection'].setTransform(tr)
 
         if not is_grid_snapped:
-            guide_pen = pg.mkPen('#FF8800', width=1.5, style=QtCore.Qt.DashLine)
             if best_snap_x is not None:
-                l = pg.InfiniteLine(pos=best_snap_x, angle=90, pen=guide_pen)
+                l = pg.InfiniteLine(pos=best_snap_x, angle=90,
+                                    pen=pg.mkPen('#FF8C00', width=1.5, style=QtCore.Qt.DashLine))
                 self.canvas.addItem(l);
                 self.guide_lines.append(l)
             if best_snap_y is not None:
-                l = pg.InfiniteLine(pos=best_snap_y, angle=0, pen=guide_pen)
+                l = pg.InfiniteLine(pos=best_snap_y, angle=0,
+                                    pen=pg.mkPen('#FF8C00', width=1.5, style=QtCore.Qt.DashLine))
                 self.canvas.addItem(l);
                 self.guide_lines.append(l)
 
