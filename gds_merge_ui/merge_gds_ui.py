@@ -55,7 +55,6 @@ class GDSViewBox(pg.ViewBox):
 
     def mouseClickEvent(self, ev):
         pt = self.mapSceneToView(ev.scenePos())
-
         if ev.button() == QtCore.Qt.RightButton:
             if self.main_ui.draw_mode in ['polygon', 'path']:
                 if len(self.main_ui.draw_points) >= (3 if self.main_ui.draw_mode == 'polygon' else 2):
@@ -67,7 +66,6 @@ class GDSViewBox(pg.ViewBox):
                 self.main_ui.handle_mouse_click(pt.x(), pt.y(), is_double=False, button=ev.button())
                 ev.accept()
             return
-
         if ev.button() == QtCore.Qt.LeftButton:
             if not ev.double():
                 self.main_ui.handle_mouse_click(pt.x(), pt.y(), is_double=False, button=ev.button())
@@ -89,10 +87,8 @@ class GDSViewBox(pg.ViewBox):
             if ev.isStart():
                 pt_start = self.mapSceneToView(ev.buttonDownScenePos())
                 self.main_ui.handle_drag_start(pt_start.x(), pt_start.y())
-
             if not ev.isStart() and not ev.isFinish():
                 self.main_ui.handle_mouse_move(pt_curr.x(), pt_curr.y())
-
             if ev.isFinish():
                 self.main_ui.handle_drag_finish(pt_curr.x(), pt_curr.y())
             ev.accept()
@@ -109,16 +105,19 @@ class GDSViewBox(pg.ViewBox):
 class GDSMergerProQt(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        # ================= 核心：更新了软件标题 =================
-        self.setWindowTitle("**WaferForge GDS Assembler**")
-        self.resize(1300, 800)
+        self.setWindowTitle("WaferForge GDS Assembler - Professional Edition V2")
+        self.resize(1400, 850)
         self.setAcceptDrops(True)
 
-        self.gds_list, self.measurements, self.undo_stack, self.guide_lines, self.overlap_patches = [], [], [], [], []
+        self.default_palette = QtWidgets.QApplication.instance().palette()
+        self.is_dark_mode = False
+
+        self.gds_list, self.measurements = [], []
         self.user_texts, self.user_shapes = [], []
+        self.undo_stack, self.redo_stack = [], []
+        self.guide_lines, self.overlap_patches = [], []
         self.crop_box = None
         self.layer_mapping = {}
-
         self.workers = []
 
         self.dragging_type, self.dragging_idx = None, -1
@@ -129,18 +128,17 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
 
         self.measure_start_pt = self.measure_line = self.measure_text = self.snap_indicator = None
         self.measure_state = 0
-
         self.draw_mode, self.draw_points, self.draw_current_props, self.temp_draw_preview = None, [], {}, None
         self.ctrl_pressed = False
 
         self.block_w, self.block_h = 5000.0, 5000.0
         self.top_cell_name = "MERGED_CHIP"
-        # 换成了 KLayout 经典的高饱和度图层配色，在白底下依然亮眼
         self.color_palette = ['#FF0000', '#009900', '#0000FF', '#00FFFF', '#FF00FF', '#999900', '#FF8000', '#00FF80',
                               '#8000FF']
 
         self.setup_ui()
         self.draw_preview(reset_view=True)
+        self.save_snapshot()  # 保存初始状态
 
     def keyPressEvent(self, event):
         if event.key() in [QtCore.Qt.Key_Control, QtCore.Qt.Key_Meta]:
@@ -170,28 +168,28 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         self.main_splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
         self.setCentralWidget(self.main_splitter)
 
-        # --- Left Panel ---
+        # ================== 左侧面板 ==================
         left_panel = QtWidgets.QWidget()
         left_layout = QtWidgets.QVBoxLayout(left_panel)
         left_layout.setContentsMargins(5, 5, 5, 5)
 
         proj_layout = QtWidgets.QHBoxLayout()
-        btn_load = QtWidgets.QPushButton("📂 Load Project")
+        btn_load = QtWidgets.QPushButton("📂 Load")
         btn_load.clicked.connect(self.action_load_project)
-        btn_save = QtWidgets.QPushButton("💾 Save Project")
+        btn_save = QtWidgets.QPushButton("💾 Save")
         btn_save.clicked.connect(self.action_save_project)
-        proj_layout.addWidget(btn_load)
+        proj_layout.addWidget(btn_load);
         proj_layout.addWidget(btn_save)
         left_layout.addLayout(proj_layout)
 
         grp_list = QtWidgets.QGroupBox("1a. GDS Files (Drag & Drop)")
         vbox_list = QtWidgets.QVBoxLayout(grp_list)
         btn_gds_layout = QtWidgets.QHBoxLayout()
-        btn_add = QtWidgets.QPushButton("➕ Add")
+        btn_add = QtWidgets.QPushButton("➕ Add");
         btn_add.clicked.connect(self.add_gds)
-        btn_del = QtWidgets.QPushButton("➖ Del")
+        btn_del = QtWidgets.QPushButton("➖ Del");
         btn_del.clicked.connect(self.action_delete_selected)
-        btn_gds_layout.addWidget(btn_add)
+        btn_gds_layout.addWidget(btn_add);
         btn_gds_layout.addWidget(btn_del)
         vbox_list.addLayout(btn_gds_layout)
 
@@ -201,14 +199,15 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         vbox_list.addWidget(self.list_widget)
         left_layout.addWidget(grp_list, 1)
 
-        grp_size = QtWidgets.QGroupBox("1b. Total Block Size (um)")
+        grp_size = QtWidgets.QGroupBox("1b. Block Size (um)")
         size_layout = QtWidgets.QHBoxLayout(grp_size)
-        size_layout.addWidget(QtWidgets.QLabel("W x H:"))
         self.inp_block_w = QtWidgets.QLineEdit(str(self.block_w))
         self.inp_block_h = QtWidgets.QLineEdit(str(self.block_h))
         btn_apply_size = QtWidgets.QPushButton("Apply")
         btn_apply_size.clicked.connect(self.update_block_size)
+        size_layout.addWidget(QtWidgets.QLabel("W:"));
         size_layout.addWidget(self.inp_block_w)
+        size_layout.addWidget(QtWidgets.QLabel("H:"));
         size_layout.addWidget(self.inp_block_h)
         size_layout.addWidget(btn_apply_size)
         left_layout.addWidget(grp_size)
@@ -220,15 +219,14 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         self.cb_anchor.addItems(["Bottom-Left", "Bottom-Right", "Top-Left", "Top-Right", "Center"])
         self.cb_anchor.currentIndexChanged.connect(self.on_anchor_change)
         pos_layout.addRow("Anchor:", self.cb_anchor)
-
         h_pos = QtWidgets.QHBoxLayout()
-        self.inp_x = QtWidgets.QLineEdit("0.0")
+        self.inp_x = QtWidgets.QLineEdit("0.0");
         self.inp_y = QtWidgets.QLineEdit("0.0")
-        btn_apply_pos = QtWidgets.QPushButton("Apply")
+        btn_apply_pos = QtWidgets.QPushButton("Apply");
         btn_apply_pos.clicked.connect(self.apply_manual_position)
-        h_pos.addWidget(QtWidgets.QLabel("X:"))
+        h_pos.addWidget(QtWidgets.QLabel("X:"));
         h_pos.addWidget(self.inp_x)
-        h_pos.addWidget(QtWidgets.QLabel("Y:"))
+        h_pos.addWidget(QtWidgets.QLabel("Y:"));
         h_pos.addWidget(self.inp_y)
         h_pos.addWidget(btn_apply_pos)
         pos_layout.addRow("Pos:", h_pos)
@@ -238,51 +236,51 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         finish_layout = QtWidgets.QVBoxLayout(tab_finish)
         grp_dummy = QtWidgets.QGroupBox("1. Dummy Fill")
         f_dummy = QtWidgets.QFormLayout(grp_dummy)
-        self.chk_dummy = QtWidgets.QCheckBox("Enable")
-        self.chk_stagger = QtWidgets.QCheckBox("Staggered")
+        self.chk_dummy = QtWidgets.QCheckBox("Enable");
+        self.chk_stagger = QtWidgets.QCheckBox("Staggered");
         self.chk_stagger.setChecked(True)
-        h_d1 = QtWidgets.QHBoxLayout()
-        h_d1.addWidget(self.chk_dummy)
+        h_d1 = QtWidgets.QHBoxLayout();
+        h_d1.addWidget(self.chk_dummy);
         h_d1.addWidget(self.chk_stagger)
         f_dummy.addRow(h_d1)
-        h_d2 = QtWidgets.QHBoxLayout()
-        self.inp_dlyr = QtWidgets.QLineEdit("1")
+        h_d2 = QtWidgets.QHBoxLayout();
+        self.inp_dlyr = QtWidgets.QLineEdit("1");
         self.inp_ddt = QtWidgets.QLineEdit("0")
-        h_d2.addWidget(QtWidgets.QLabel("Lyr:"))
-        h_d2.addWidget(self.inp_dlyr)
-        h_d2.addWidget(QtWidgets.QLabel("DT:"))
+        h_d2.addWidget(QtWidgets.QLabel("Lyr:"));
+        h_d2.addWidget(self.inp_dlyr);
+        h_d2.addWidget(QtWidgets.QLabel("DT:"));
         h_d2.addWidget(self.inp_ddt)
         f_dummy.addRow(h_d2)
-        h_d3 = QtWidgets.QHBoxLayout()
-        self.inp_dsize = QtWidgets.QLineEdit("5.0")
+        h_d3 = QtWidgets.QHBoxLayout();
+        self.inp_dsize = QtWidgets.QLineEdit("5.0");
         self.inp_dspc = QtWidgets.QLineEdit("5.0")
-        h_d3.addWidget(QtWidgets.QLabel("Size:"))
-        h_d3.addWidget(self.inp_dsize)
-        h_d3.addWidget(QtWidgets.QLabel("Spc:"))
+        h_d3.addWidget(QtWidgets.QLabel("Size:"));
+        h_d3.addWidget(self.inp_dsize);
+        h_d3.addWidget(QtWidgets.QLabel("Spc:"));
         h_d3.addWidget(self.inp_dspc)
         f_dummy.addRow(h_d3)
-        self.inp_dmargin = QtWidgets.QLineEdit("3.0")
+        self.inp_dmargin = QtWidgets.QLineEdit("3.0");
         f_dummy.addRow("Margin:", self.inp_dmargin)
         finish_layout.addWidget(grp_dummy)
 
         grp_seal = QtWidgets.QGroupBox("2. Seal Ring")
         f_seal = QtWidgets.QFormLayout(grp_seal)
-        self.chk_seal = QtWidgets.QCheckBox("Enable Seal Ring")
+        self.chk_seal = QtWidgets.QCheckBox("Enable Seal Ring");
         f_seal.addRow(self.chk_seal)
-        h_s1 = QtWidgets.QHBoxLayout()
-        self.inp_slyr = QtWidgets.QLineEdit("10")
+        h_s1 = QtWidgets.QHBoxLayout();
+        self.inp_slyr = QtWidgets.QLineEdit("10");
         self.inp_sdt = QtWidgets.QLineEdit("0")
-        h_s1.addWidget(QtWidgets.QLabel("Lyr:"))
-        h_s1.addWidget(self.inp_slyr)
-        h_s1.addWidget(QtWidgets.QLabel("DT:"))
+        h_s1.addWidget(QtWidgets.QLabel("Lyr:"));
+        h_s1.addWidget(self.inp_slyr);
+        h_s1.addWidget(QtWidgets.QLabel("DT:"));
         h_s1.addWidget(self.inp_sdt)
         f_seal.addRow(h_s1)
-        h_s2 = QtWidgets.QHBoxLayout()
-        self.inp_sw = QtWidgets.QLineEdit("20.0")
+        h_s2 = QtWidgets.QHBoxLayout();
+        self.inp_sw = QtWidgets.QLineEdit("20.0");
         self.inp_sdist = QtWidgets.QLineEdit("0.0")
-        h_s2.addWidget(QtWidgets.QLabel("Width:"))
-        h_s2.addWidget(self.inp_sw)
-        h_s2.addWidget(QtWidgets.QLabel("Dist:"))
+        h_s2.addWidget(QtWidgets.QLabel("Width:"));
+        h_s2.addWidget(self.inp_sw);
+        h_s2.addWidget(QtWidgets.QLabel("Dist:"));
         h_s2.addWidget(self.inp_sdist)
         f_seal.addRow(h_s2)
         finish_layout.addWidget(grp_seal)
@@ -291,79 +289,88 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         tab_export = QtWidgets.QWidget()
         export_layout = QtWidgets.QVBoxLayout(tab_export)
         export_layout.addWidget(QtWidgets.QLabel("Merged Cell Name:"))
-        self.inp_topname = QtWidgets.QLineEdit(self.top_cell_name)
+        self.inp_topname = QtWidgets.QLineEdit(self.top_cell_name);
         export_layout.addWidget(self.inp_topname)
-        btn_map = QtWidgets.QPushButton("🛠️ Layer Mapping")
+        btn_map = QtWidgets.QPushButton("🛠️ Layer Mapping");
         btn_map.clicked.connect(self.open_layer_mapping_dialog)
         export_layout.addWidget(btn_map)
-        btn_exp = QtWidgets.QPushButton("💾 EXPORT GDS")
+        btn_exp = QtWidgets.QPushButton("💾 EXPORT GDS");
         btn_exp.setMinimumHeight(40)
         btn_exp.setStyleSheet("background-color: #0078D7; color: white; font-weight: bold; border-radius: 4px;")
         btn_exp.clicked.connect(self.execute_stitch)
-        export_layout.addWidget(btn_exp)
+        export_layout.addWidget(btn_exp);
         export_layout.addStretch()
         self.tabs.addTab(tab_export, "💾 Export")
         left_layout.addWidget(self.tabs)
 
-        # --- Center Panel ---
+        # ================== 中央面板 ==================
         center_panel = QtWidgets.QWidget()
         center_layout = QtWidgets.QVBoxLayout(center_panel)
         center_layout.setContentsMargins(0, 5, 0, 5)
 
         tb1 = QtWidgets.QHBoxLayout()
-        btn_undo = QtWidgets.QPushButton("↩️ Undo")
+        self.btn_theme = QtWidgets.QPushButton("🌙 Dark Theme");
+        self.btn_theme.setCheckable(True)
+        self.btn_theme.toggled.connect(self.on_theme_toggle);
+        tb1.addWidget(self.btn_theme)
+
+        btn_undo = QtWidgets.QPushButton("↩️ Undo");
         btn_undo.clicked.connect(self.action_undo)
-        tb1.addWidget(btn_undo)
-        btn_fit = QtWidgets.QPushButton("🔍 Fit")
+        btn_redo = QtWidgets.QPushButton("↪️ Redo");
+        btn_redo.clicked.connect(self.action_redo)
+        tb1.addWidget(btn_undo);
+        tb1.addWidget(btn_redo)
+
+        btn_fit = QtWidgets.QPushButton("🔍 Fit");
         btn_fit.clicked.connect(lambda: self.canvas.autoRange())
         tb1.addWidget(btn_fit)
-        self.btn_measure = QtWidgets.QPushButton("📏 Measure")
+        self.btn_measure = QtWidgets.QPushButton("📏 Measure");
         self.btn_measure.setCheckable(True)
-        self.btn_measure.toggled.connect(self.on_measure_toggle)
+        self.btn_measure.toggled.connect(self.on_measure_toggle);
         tb1.addWidget(self.btn_measure)
-        self.btn_overlap = QtWidgets.QPushButton("🔴 Overlap (ON)")
+        self.btn_overlap = QtWidgets.QPushButton("🔴 Overlap (ON)");
         self.btn_overlap.setCheckable(True)
-        self.btn_overlap.setChecked(True)
+        self.btn_overlap.setChecked(True);
         self.btn_overlap.toggled.connect(self.on_overlap_toggle)
         tb1.addWidget(self.btn_overlap)
-        self.btn_bbox = QtWidgets.QPushButton("✅ BBox Only")
+        self.btn_bbox = QtWidgets.QPushButton("✅ BBox Only");
         self.btn_bbox.setCheckable(True)
-        self.btn_bbox.setChecked(True)
+        self.btn_bbox.setChecked(True);
         self.btn_bbox.toggled.connect(self.on_bbox_toggle)
         tb1.addWidget(self.btn_bbox)
-        self.chk_snap = QtWidgets.QCheckBox("🌐 Snap")
-        self.inp_snap = QtWidgets.QLineEdit("10.0")
+        self.chk_snap = QtWidgets.QCheckBox("🌐 Snap");
+        self.inp_snap = QtWidgets.QLineEdit("10.0");
         self.inp_snap.setFixedWidth(50)
-        tb1.addWidget(self.chk_snap)
-        tb1.addWidget(self.inp_snap)
+        tb1.addWidget(self.chk_snap);
+        tb1.addWidget(self.inp_snap);
         tb1.addStretch()
         center_layout.addLayout(tb1)
 
         tb2 = QtWidgets.QHBoxLayout()
-        btn_text = QtWidgets.QPushButton("📝 Text")
-        btn_text.clicked.connect(self.action_add_text_dialog)
+        btn_text = QtWidgets.QPushButton("📝 Text");
+        btn_text.clicked.connect(self.action_add_text_dialog);
         tb2.addWidget(btn_text)
-        btn_box = QtWidgets.QPushButton("🔲 Box")
-        btn_box.clicked.connect(lambda: self.action_add_shape_dialog('box'))
+        btn_box = QtWidgets.QPushButton("🔲 Box");
+        btn_box.clicked.connect(lambda: self.action_add_shape_dialog('box'));
         tb2.addWidget(btn_box)
-        btn_poly = QtWidgets.QPushButton("🔶 Poly")
-        btn_poly.clicked.connect(lambda: self.action_add_shape_dialog('polygon'))
+        btn_poly = QtWidgets.QPushButton("🔶 Poly");
+        btn_poly.clicked.connect(lambda: self.action_add_shape_dialog('polygon'));
         tb2.addWidget(btn_poly)
-        btn_path = QtWidgets.QPushButton("〰️ Path")
-        btn_path.clicked.connect(lambda: self.action_add_shape_dialog('path'))
+        btn_path = QtWidgets.QPushButton("〰️ Path");
+        btn_path.clicked.connect(lambda: self.action_add_shape_dialog('path'));
         tb2.addWidget(btn_path)
-        btn_via = QtWidgets.QPushButton("⚄ ViaArray")
-        btn_via.clicked.connect(lambda: self.action_add_shape_dialog('via_array'))
+        btn_via = QtWidgets.QPushButton("⚄ ViaArray");
+        btn_via.clicked.connect(lambda: self.action_add_shape_dialog('via_array'));
         tb2.addWidget(btn_via)
-        btn_crop = QtWidgets.QPushButton("✂️ Crop")
-        btn_crop.clicked.connect(self.action_draw_crop_box)
+        btn_crop = QtWidgets.QPushButton("✂️ Crop");
+        btn_crop.clicked.connect(self.action_draw_crop_box);
         tb2.addWidget(btn_crop)
-        btn_clear = QtWidgets.QPushButton("🗑️ Clear")
-        btn_clear.clicked.connect(self.action_clear_annotations)
+        btn_clear = QtWidgets.QPushButton("🗑️ Clear");
+        btn_clear.clicked.connect(self.action_clear_annotations);
         tb2.addWidget(btn_clear)
 
         btn_bool = QtWidgets.QPushButton("🔣 Boolean")
-        btn_bool.setStyleSheet("color: #d35400; font-weight: bold;")
+        btn_bool.setStyleSheet("color: #d35400; font-weight: bold;");
         btn_bool.clicked.connect(self.action_boolean_dialog)
         tb2.addWidget(btn_bool)
 
@@ -371,39 +378,30 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         self.cb_align_go.addItems(
             ["Align Left", "Align Center X", "Align Right", "Align Top", "Align Center Y", "Align Bottom",
              "Distribute H", "Distribute V"])
-        btn_align = QtWidgets.QPushButton("▶ Align")
+        btn_align = QtWidgets.QPushButton("▶ Align");
         btn_align.clicked.connect(self.execute_align)
-        tb2.addWidget(self.cb_align_go)
-        tb2.addWidget(btn_align)
+        tb2.addWidget(self.cb_align_go);
+        tb2.addWidget(btn_align);
         tb2.addStretch()
         center_layout.addLayout(tb2)
 
-        # ================== 核心：PyQtGraph 画布控件，换成了白色背景 ==================
         view_box = GDSViewBox(self)
         self.canvas = pg.PlotWidget(viewBox=view_box)
-        self.canvas.setBackground('#FFFFFF')
-        self.canvas.showGrid(x=True, y=True, alpha=0.3)
+        # ================= 新增：动态智能网格 =================
+        self.grid = pg.GridItem()
+        self.canvas.addItem(self.grid)
         self.canvas.setAspectLocked(True)
         self.canvas.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
-
-        # 恢复坐标轴显示，调整 pen 为深灰色以适配白色背景
-        ax_left = self.canvas.getAxis('left')
-        ax_bottom = self.canvas.getAxis('bottom')
-        dark_pen = pg.mkPen('#555555')
-        ax_left.setPen(dark_pen);
-        ax_left.setTextPen(dark_pen)
-        ax_bottom.setPen(dark_pen);
-        ax_bottom.setTextPen(dark_pen)
-
         center_layout.addWidget(self.canvas, 1)
 
         self.status_label = QtWidgets.QLabel("Ready: You can drag and drop GDS files here.")
         center_layout.addWidget(self.status_label)
 
-        # --- Right Panel ---
+        # ================== 右侧面板 ==================
         right_panel = QtWidgets.QWidget()
         right_layout = QtWidgets.QVBoxLayout(right_panel)
         right_layout.setContentsMargins(5, 5, 5, 5)
+
         grp_layers = QtWidgets.QGroupBox("Layers")
         l_layout = QtWidgets.QVBoxLayout(grp_layers)
         btn_refresh = QtWidgets.QPushButton("🔄 Refresh")
@@ -411,13 +409,276 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         l_layout.addWidget(btn_refresh)
         self.layer_list = QtWidgets.QListWidget()
         l_layout.addWidget(self.layer_list)
-        right_layout.addWidget(grp_layers)
+        right_layout.addWidget(grp_layers, 1)
+
+        # ================= 新增：动态属性检查器 =================
+        grp_props = QtWidgets.QGroupBox("📌 Property Inspector")
+        props_layout = QtWidgets.QFormLayout(grp_props)
+        self.prop_type_lbl = QtWidgets.QLabel("-");
+        self.prop_type_lbl.setStyleSheet("font-weight: bold; color: #0078D7;")
+        self.prop_name_inp = QtWidgets.QLineEdit()
+        self.prop_x_inp = QtWidgets.QLineEdit();
+        self.prop_y_inp = QtWidgets.QLineEdit()
+        self.prop_w_inp = QtWidgets.QLineEdit();
+        self.prop_h_inp = QtWidgets.QLineEdit()
+        self.prop_l_inp = QtWidgets.QLineEdit();
+        self.prop_d_inp = QtWidgets.QLineEdit()
+
+        props_layout.addRow("Type:", self.prop_type_lbl)
+        props_layout.addRow("Name/Text:", self.prop_name_inp)
+        props_layout.addRow("X:", self.prop_x_inp)
+        props_layout.addRow("Y:", self.prop_y_inp)
+        props_layout.addRow("Width/Size:", self.prop_w_inp)
+        props_layout.addRow("Height:", self.prop_h_inp)
+        props_layout.addRow("Layer:", self.prop_l_inp)
+        props_layout.addRow("Datatype:", self.prop_d_inp)
+
+        btn_prop_apply = QtWidgets.QPushButton("✅ Apply Changes")
+        btn_prop_apply.setStyleSheet("background-color: #2ca02c; color: white; font-weight: bold;")
+        btn_prop_apply.clicked.connect(self.apply_inspector_properties)
+        props_layout.addRow(btn_prop_apply)
+        right_layout.addWidget(grp_props, 1)
 
         self.main_splitter.addWidget(left_panel)
         self.main_splitter.addWidget(center_panel)
         self.main_splitter.addWidget(right_panel)
-        self.main_splitter.setSizes([350, 800, 150])
+        self.main_splitter.setSizes([320, 800, 280])
 
+        self.apply_light_theme()
+        self.populate_inspector()
+
+    # ================= 一键切换主题 =================
+    def on_theme_toggle(self, checked):
+        self.is_dark_mode = checked
+        if checked:
+            self.btn_theme.setText("☀️ Light Theme")
+            self.apply_dark_theme()
+        else:
+            self.btn_theme.setText("🌙 Dark Theme")
+            self.apply_light_theme()
+        self.draw_preview(reset_view=False)
+
+    def apply_dark_theme(self):
+        palette = QtGui.QPalette()
+        palette.setColor(QtGui.QPalette.Window, QtGui.QColor(43, 43, 43))
+        palette.setColor(QtGui.QPalette.WindowText, QtCore.Qt.white)
+        palette.setColor(QtGui.QPalette.Base, QtGui.QColor(25, 25, 25))
+        palette.setColor(QtGui.QPalette.AlternateBase, QtGui.QColor(43, 43, 43))
+        palette.setColor(QtGui.QPalette.ToolTipBase, QtCore.Qt.white)
+        palette.setColor(QtGui.QPalette.ToolTipText, QtCore.Qt.white)
+        palette.setColor(QtGui.QPalette.Text, QtCore.Qt.white)
+        palette.setColor(QtGui.QPalette.Button, QtGui.QColor(53, 53, 53))
+        palette.setColor(QtGui.QPalette.ButtonText, QtCore.Qt.white)
+        palette.setColor(QtGui.QPalette.BrightText, QtCore.Qt.red)
+        palette.setColor(QtGui.QPalette.Link, QtGui.QColor(42, 130, 218))
+        palette.setColor(QtGui.QPalette.Highlight, QtGui.QColor(42, 130, 218))
+        palette.setColor(QtGui.QPalette.HighlightedText, QtCore.Qt.black)
+        QtWidgets.QApplication.instance().setPalette(palette)
+
+        self.canvas.setBackground('#000000')
+        ax_left = self.canvas.getAxis('left');
+        ax_bottom = self.canvas.getAxis('bottom')
+        ax_left.setPen(pg.mkPen('#888888'));
+        ax_left.setTextPen(pg.mkPen('#CCCCCC'))
+        ax_bottom.setPen(pg.mkPen('#888888'));
+        ax_bottom.setTextPen(pg.mkPen('#CCCCCC'))
+        self.grid.setTextPen(pg.mkPen('#888888'))
+        self.grid.setPen(pg.mkPen(color=(100, 100, 100, 100), width=1))
+
+    def apply_light_theme(self):
+        QtWidgets.QApplication.instance().setPalette(self.default_palette)
+        self.canvas.setBackground('#FFFFFF')
+        ax_left = self.canvas.getAxis('left');
+        ax_bottom = self.canvas.getAxis('bottom')
+        ax_left.setPen(pg.mkPen('#555555'));
+        ax_left.setTextPen(pg.mkPen('#555555'))
+        ax_bottom.setPen(pg.mkPen('#555555'));
+        ax_bottom.setTextPen(pg.mkPen('#555555'))
+        self.grid.setTextPen(pg.mkPen('#555555'))
+        self.grid.setPen(pg.mkPen(color=(180, 180, 180, 100), width=1))
+
+    # ================= 动态属性检查器 =================
+    def populate_inspector(self):
+        self.prop_name_inp.setEnabled(False);
+        self.prop_x_inp.setEnabled(False);
+        self.prop_y_inp.setEnabled(False)
+        self.prop_w_inp.setEnabled(False);
+        self.prop_h_inp.setEnabled(False)
+        self.prop_l_inp.setEnabled(False);
+        self.prop_d_inp.setEnabled(False)
+
+        if self.active_shape_type == 'gds' and self.active_shape_idx != -1:
+            gds = self.gds_list[self.active_shape_idx]
+            self.prop_type_lbl.setText("GDS Cell")
+            self.prop_name_inp.setEnabled(True);
+            self.prop_name_inp.setText(gds['name'])
+            self.prop_x_inp.setEnabled(True);
+            self.prop_y_inp.setEnabled(True)
+            bl_x, bl_y = self.get_anchor_coords(gds, "Bottom-Left")
+            self.prop_x_inp.setText(f"{bl_x:.3f}");
+            self.prop_y_inp.setText(f"{bl_y:.3f}")
+
+        elif self.active_shape_type == 'shape' and self.active_shape_idx != -1:
+            s = self.user_shapes[self.active_shape_idx]
+            self.prop_type_lbl.setText(s['type'].capitalize())
+            self.prop_x_inp.setEnabled(True);
+            self.prop_y_inp.setEnabled(True)
+            self.prop_l_inp.setEnabled(True);
+            self.prop_d_inp.setEnabled(True)
+            self.prop_l_inp.setText(str(s['layer']));
+            self.prop_d_inp.setText(str(s['dt']))
+
+            if s['type'] in ['box', 'via_array']:
+                self.prop_w_inp.setEnabled(True);
+                self.prop_h_inp.setEnabled(True)
+                pts = s['points']
+                x0, y0 = min(pts[0][0], pts[1][0]), min(pts[0][1], pts[1][1])
+                w, h = abs(pts[1][0] - pts[0][0]), abs(pts[1][1] - pts[0][1])
+                self.prop_x_inp.setText(f"{x0:.3f}");
+                self.prop_y_inp.setText(f"{y0:.3f}")
+                self.prop_w_inp.setText(f"{w:.3f}");
+                self.prop_h_inp.setText(f"{h:.3f}")
+            elif s['type'] == 'path':
+                self.prop_w_inp.setEnabled(True)
+                self.prop_x_inp.setText(f"{s['points'][0][0]:.3f}");
+                self.prop_y_inp.setText(f"{s['points'][0][1]:.3f}")
+                self.prop_w_inp.setText(f"{s['width']:.3f}")
+            elif s['type'] == 'polygon':
+                self.prop_x_inp.setText(f"{s['points'][0][0]:.3f}");
+                self.prop_y_inp.setText(f"{s['points'][0][1]:.3f}")
+
+        elif self.active_shape_type == 'text' and self.active_shape_idx != -1:
+            t = self.user_texts[self.active_shape_idx]
+            self.prop_type_lbl.setText("Text Label")
+            self.prop_name_inp.setEnabled(True);
+            self.prop_name_inp.setText(t['text'])
+            self.prop_x_inp.setEnabled(True);
+            self.prop_y_inp.setEnabled(True)
+            self.prop_x_inp.setText(f"{t['x']:.3f}");
+            self.prop_y_inp.setText(f"{t['y']:.3f}")
+            self.prop_w_inp.setEnabled(True);
+            self.prop_w_inp.setText(f"{t['size']:.3f}")
+            self.prop_l_inp.setEnabled(True);
+            self.prop_d_inp.setEnabled(True)
+            self.prop_l_inp.setText(str(t['layer']));
+            self.prop_d_inp.setText(str(t['dt']))
+        else:
+            self.prop_type_lbl.setText("-")
+            self.prop_name_inp.clear();
+            self.prop_x_inp.clear();
+            self.prop_y_inp.clear()
+            self.prop_w_inp.clear();
+            self.prop_h_inp.clear();
+            self.prop_l_inp.clear();
+            self.prop_d_inp.clear()
+
+    def apply_inspector_properties(self):
+        if self.active_shape_type == 'gds' and self.active_shape_idx != -1:
+            self.save_snapshot()
+            gds = self.gds_list[self.active_shape_idx]
+            try:
+                nx, ny = float(self.prop_x_inp.text()), float(self.prop_y_inp.text())
+                self.set_anchor_coords(gds, "Bottom-Left", nx, ny)
+                gds['name'] = self.prop_name_inp.text()
+                self.list_widget.item(self.active_shape_idx).setText(f"[{self.active_shape_idx + 1}] {gds['name']}")
+            except ValueError:
+                pass
+            self.draw_preview()
+
+        elif self.active_shape_type == 'shape' and self.active_shape_idx != -1:
+            self.save_snapshot()
+            s = self.user_shapes[self.active_shape_idx]
+            try:
+                s['layer'], s['dt'] = int(self.prop_l_inp.text()), int(self.prop_d_inp.text())
+                nx, ny = float(self.prop_x_inp.text()), float(self.prop_y_inp.text())
+                if s['type'] in ['box', 'via_array']:
+                    nw, nh = float(self.prop_w_inp.text()), float(self.prop_h_inp.text())
+                    s['points'] = [(nx, ny), (nx + nw, ny + nh)]
+                elif s['type'] == 'path':
+                    s['width'] = float(self.prop_w_inp.text())
+                    dx, dy = nx - s['points'][0][0], ny - s['points'][0][1]
+                    s['points'] = [(px + dx, py + dy) for px, py in s['points']]
+                elif s['type'] == 'polygon':
+                    dx, dy = nx - s['points'][0][0], ny - s['points'][0][1]
+                    s['points'] = [(px + dx, py + dy) for px, py in s['points']]
+            except ValueError:
+                pass
+            self.draw_preview()
+
+        elif self.active_shape_type == 'text' and self.active_shape_idx != -1:
+            self.save_snapshot()
+            t = self.user_texts[self.active_shape_idx]
+            try:
+                t['x'], t['y'] = float(self.prop_x_inp.text()), float(self.prop_y_inp.text())
+                t['text'] = self.prop_name_inp.text()
+                t['size'] = float(self.prop_w_inp.text())
+                t['layer'], t['dt'] = int(self.prop_l_inp.text()), int(self.prop_d_inp.text())
+            except ValueError:
+                pass
+            self.draw_preview()
+
+    # ================= 极致内存优化的 Undo/Redo 核心 =================
+    def create_snapshot_dict(self):
+        # 抛弃深拷贝重物体，仅记录坐标字典和引用，速度极快内存为0
+        clean_texts = [{k: v for k, v in t.items() if k != 'text_obj'} for t in self.user_texts]
+        clean_shapes = [{k: v for k, v in s.items() if k != 'patch'} for s in self.user_shapes]
+        snapshot = {
+            'gds_list': [],
+            'measurements': [dict(m) for m in self.measurements],
+            'user_texts': clean_texts,
+            'user_shapes': clean_shapes,
+            'crop_box': self.crop_box.copy() if self.crop_box else None
+        }
+        for gds in self.gds_list:
+            snap_gds = {
+                'path': gds['path'], 'name': gds['name'], 'base_bbox': gds['base_bbox'],
+                'trans': gds['trans'] * db.DTrans(), 'offset_x': gds['offset_x'], 'offset_y': gds['offset_y'],
+                'color': gds['color'], 'true_polygons': gds['true_polygons'], 'layers': gds.get('layers', []),
+                'qpath': gds.get('qpath')  # 核心：保留底层C++渲染轮廓的引用，不要重建！
+            }
+            snapshot['gds_list'].append(snap_gds)
+        return snapshot
+
+    def save_snapshot(self):
+        self.undo_stack.append(self.create_snapshot_dict())
+        self.redo_stack.clear()
+        if len(self.undo_stack) > 50: self.undo_stack.pop(0)
+
+    def restore_snapshot(self, snapshot):
+        self.gds_list.clear();
+        self.list_widget.clear()
+        self.active_shape_type = None;
+        self.active_shape_idx = -1
+
+        for i, item in enumerate(snapshot['gds_list']):
+            gds_info = {
+                'path': item['path'], 'name': item['name'], 'base_bbox': item['base_bbox'],
+                'trans': item['trans'], 'offset_x': item['offset_x'], 'offset_y': item['offset_y'],
+                'color': item['color'], 'patch': None, 'shadow_patch': None, 'collection': None,
+                'center_text': None, 'true_polygons': item['true_polygons'], 'layers': item.get('layers', []),
+                'qpath': item.get('qpath')
+            }
+            self.gds_list.append(gds_info)
+            self.list_widget.addItem(f"[{i + 1}] {item['name']}")
+
+        self.measurements = snapshot.get('measurements', [])
+        self.user_texts = snapshot.get('user_texts', [])
+        self.user_shapes = snapshot.get('user_shapes', [])
+        self.crop_box = snapshot.get('crop_box')
+        self.clear_active_measurement()
+        self.draw_preview(reset_view=False)
+
+    def action_undo(self):
+        if not self.undo_stack: return
+        self.redo_stack.append(self.create_snapshot_dict())
+        self.restore_snapshot(self.undo_stack.pop())
+
+    def action_redo(self):
+        if not self.redo_stack: return
+        self.undo_stack.append(self.create_snapshot_dict())
+        self.restore_snapshot(self.redo_stack.pop())
+
+    # ================= 业务方法 =================
     def refresh_layer_list(self):
         self.layer_list.clear()
         global_layers = set()
@@ -431,22 +692,26 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         worker = GDSLoadWorker(filepath)
         worker.result_ready.connect(self.on_gds_loaded)
         worker.error_occurred.connect(self.on_gds_load_error)
-
-        self.workers.append(worker)
+        self.workers.append(worker);
         worker.start()
 
     def on_gds_loaded(self, result):
         worker = self.sender()
-        if worker in self.workers:
-            self.workers.remove(worker)
+        if worker in self.workers: self.workers.remove(worker)
 
         self.save_snapshot()
         filepath = result['filepath']
         base_name = os.path.splitext(os.path.basename(filepath))[0]
-
         base_bbox = db.DBox(result['bbox_left'], result['bbox_bottom'], result['bbox_right'], result['bbox_top'])
         true_polygons = result['true_polygons']
         layers = result['layers']
+
+        # 后台预先计算 QPainterPath 以实现 0 毫秒渲染
+        path = QtGui.QPainterPath()
+        if true_polygons:
+            for poly in true_polygons:
+                qpoly = QtGui.QPolygonF([QtCore.QPointF(pt[0], pt[1]) for pt in poly])
+                path.addPolygon(qpoly)
 
         cx_block, cy_block = self.block_w / 2.0, self.block_h / 2.0
         cx_gds, cy_gds = (base_bbox.left + base_bbox.right) / 2.0, (base_bbox.bottom + base_bbox.top) / 2.0
@@ -455,26 +720,23 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                     'offset_x': cx_block - cx_gds, 'offset_y': cy_block - cy_gds,
                     'color': self.color_palette[len(self.gds_list) % len(self.color_palette)],
                     'patch': None, 'shadow_patch': None, 'collection': None, 'center_text': None,
-                    'true_polygons': true_polygons, 'layers': layers}
+                    'true_polygons': true_polygons, 'layers': layers, 'qpath': path}
 
         self.gds_list.append(gds_info)
         self.list_widget.addItem(f"[{len(self.gds_list)}] {base_name}")
         self.refresh_layer_list()
-
         self.status_label.setText("Ready (后台解析完成)")
         self.draw_preview(reset_view=True)
 
     def on_gds_load_error(self, filepath, error_msg):
         worker = self.sender()
-        if worker in self.workers:
-            self.workers.remove(worker)
+        if worker in self.workers: self.workers.remove(worker)
         self.status_label.setText("Ready (加载失败)")
         QtWidgets.QMessageBox.critical(self, "Error", f"Failed to load {filepath}:\n{error_msg}")
 
     def add_gds(self):
         paths, _ = QtWidgets.QFileDialog.getOpenFileNames(self, "Open GDS", "", "GDS Files (*.gds)")
-        for p in paths:
-            self.process_single_gds(p)
+        for p in paths: self.process_single_gds(p)
 
     def on_bbox_toggle(self):
         self.btn_bbox.setText("✅ BBox Only" if self.btn_bbox.isChecked() else "🔲 Full Detail")
@@ -508,43 +770,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                     self.canvas.addItem(rect_item)
                     self.overlap_patches.append(rect_item)
 
-    def save_snapshot(self):
-        clean_texts = [{k: v for k, v in t.items() if k != 'text_obj'} for t in self.user_texts]
-        clean_shapes = [{k: v for k, v in s.items() if k != 'patch'} for s in self.user_shapes]
-        snapshot = {'gds_list': [], 'measurements': [dict(m) for m in self.measurements], 'user_texts': clean_texts,
-                    'user_shapes': clean_shapes, 'crop_box': self.crop_box.copy() if self.crop_box else None}
-        for gds in self.gds_list:
-            trans_copy = gds['trans'] * db.DTrans()
-            snap_gds = {'path': gds['path'], 'name': gds['name'], 'base_bbox': gds['base_bbox'], 'trans': trans_copy,
-                        'offset_x': gds['offset_x'], 'offset_y': gds['offset_y'], 'color': gds['color'],
-                        'true_polygons': gds['true_polygons'], 'layers': gds.get('layers', [])}
-            snapshot['gds_list'].append(snap_gds)
-        self.undo_stack.append(snapshot)
-        if len(self.undo_stack) > 30: self.undo_stack.pop(0)
-
-    def action_undo(self):
-        if not self.undo_stack: return
-        snapshot = self.undo_stack.pop()
-        self.gds_list.clear()
-        self.list_widget.clear()
-        self.active_shape_type = None
-        self.active_shape_idx = -1
-
-        for i, item in enumerate(snapshot['gds_list']):
-            gds_info = {'path': item['path'], 'name': item['name'], 'base_bbox': item['base_bbox'],
-                        'trans': item['trans'], 'offset_x': item['offset_x'], 'offset_y': item['offset_y'],
-                        'color': item['color'], 'patch': None, 'shadow_patch': None, 'collection': None,
-                        'center_text': None, 'true_polygons': item['true_polygons'], 'layers': item.get('layers', [])}
-            self.gds_list.append(gds_info)
-            self.list_widget.addItem(f"[{i + 1}] {item['name']}")
-        self.refresh_layer_list()
-        self.measurements = snapshot.get('measurements', [])
-        self.user_texts = snapshot.get('user_texts', [])
-        self.user_shapes = snapshot.get('user_shapes', [])
-        self.crop_box = snapshot.get('crop_box')
-        self.clear_active_measurement()
-        self.draw_preview(reset_view=False)
-
     def action_save_project(self):
         if not self.gds_list: return
         filepath, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Save Project", "", "GDS Project (*.gdsprj)")
@@ -575,7 +800,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 project_data = json.load(f)
-            self.gds_list.clear()
+            self.gds_list.clear();
             self.list_widget.clear()
             self.measurements = project_data.get("measurements", [])
             self.user_texts = project_data.get("user_texts", [])
@@ -584,104 +809,31 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             saved_mapping = project_data.get("layer_mapping", {})
             self.layer_mapping = {eval(k_str): tuple(v) for k_str, v in saved_mapping.items()}
             self.clear_active_measurement()
-            self.undo_stack.clear()
+            self.undo_stack.clear();
+            self.redo_stack.clear()
             self.block_w = project_data.get("block_width", 5000.0)
             self.block_h = project_data.get("block_height", 5000.0)
-            self.inp_block_w.setText(str(self.block_w))
+            self.inp_block_w.setText(str(self.block_w));
             self.inp_block_h.setText(str(self.block_h))
             self.inp_topname.setText(project_data.get("top_cell_name", "MERGED_CHIP"))
 
             for i, item in enumerate(project_data.get("gds_items", [])):
-                path, name = item.get("path"), item.get("name")
+                path = item.get("path")
                 if not os.path.exists(path): continue
                 self.process_single_gds(path)
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Error", str(e))
 
+    # 双击依然保留对话框以防需要，但主推属性检查器
     def edit_text_dialog(self, idx):
-        ut = self.user_texts[idx]
-        dlg = QtWidgets.QDialog(self)
-        dlg.setWindowTitle("Edit Text")
-        layout = QtWidgets.QFormLayout(dlg)
-        t_var = QtWidgets.QLineEdit(ut['text'])
-        s_var = QtWidgets.QLineEdit(str(ut['size']))
-        l_var = QtWidgets.QLineEdit(str(ut['layer']))
-        dt_var = QtWidgets.QLineEdit(str(ut['dt']))
-        layout.addRow("Text:", t_var)
-        layout.addRow("Size:", s_var)
-        layout.addRow("Layer:", l_var)
-        layout.addRow("DT:", dt_var)
-        btn = QtWidgets.QPushButton("Update")
-        btn.clicked.connect(dlg.accept)
-        layout.addRow(btn)
-        if dlg.exec_():
-            try:
-                self.save_snapshot()
-                ut['text'], ut['size'], ut['layer'], ut['dt'] = t_var.text(), float(s_var.text()), int(
-                    l_var.text()), int(dt_var.text())
-                self.draw_preview(reset_view=False)
-            except ValueError:
-                pass
+        self.active_shape_type = 'text';
+        self.active_shape_idx = idx
+        self.update_canvas_selection()
 
     def edit_shape_dialog(self, idx):
-        s = self.user_shapes[idx]
-        dlg = QtWidgets.QDialog(self)
-        dlg.setWindowTitle(f"Edit {s['type'].capitalize()}")
-        layout = QtWidgets.QFormLayout(dlg)
-        l_var = QtWidgets.QLineEdit(str(s['layer']))
-        dt_var = QtWidgets.QLineEdit(str(s['dt']))
-        layout.addRow("Layer:", l_var)
-        layout.addRow("DT:", dt_var)
-
-        w_var = QtWidgets.QLineEdit()
-        box_w_var = QtWidgets.QLineEdit()
-        box_h_var = QtWidgets.QLineEdit()
-        px_var = QtWidgets.QLineEdit()
-        py_var = QtWidgets.QLineEdit()
-        min_x, min_y = 0, 0
-
-        if s['type'] == 'path':
-            w_var.setText(str(s.get('width', 20.0)));
-            layout.addRow("Width:", w_var)
-        elif s['type'] == 'box':
-            pts = s['points']
-            min_x, min_y = min(pts[0][0], pts[1][0]), min(pts[0][1], pts[1][1])
-            box_w_var.setText(str(abs(pts[1][0] - pts[0][0])))
-            box_h_var.setText(str(abs(pts[1][1] - pts[0][1])))
-            layout.addRow("Width:", box_w_var)
-            layout.addRow("Height:", box_h_var)
-        elif s['type'] == 'via_array':
-            w_var.setText(str(s.get('via_w', 1.0)))
-            box_w_var.setText(str(s.get('via_h', 1.0)))
-            px_var.setText(str(s.get('pitch_x', 2.0)))
-            py_var.setText(str(s.get('pitch_y', 2.0)))
-            h1 = QtWidgets.QHBoxLayout()
-            h1.addWidget(w_var)
-            h1.addWidget(box_w_var)
-            layout.addRow("Via WxH:", h1)
-            h2 = QtWidgets.QHBoxLayout()
-            h2.addWidget(px_var)
-            h2.addWidget(py_var)
-            layout.addRow("Pitch XxY:", h2)
-
-        btn = QtWidgets.QPushButton("Update")
-        btn.clicked.connect(dlg.accept)
-        layout.addRow(btn)
-        if dlg.exec_():
-            try:
-                self.save_snapshot()
-                s['layer'], s['dt'] = int(l_var.text()), int(dt_var.text())
-                if s['type'] == 'path':
-                    s['width'] = float(w_var.text())
-                elif s['type'] == 'box':
-                    nw, nh = float(box_w_var.text()), float(box_h_var.text())
-                    s['points'] = [(min_x, min_y), (min_x + nw, min_y + nh)]
-                elif s['type'] == 'via_array':
-                    s['via_w'], s['via_h'] = float(w_var.text()), float(box_w_var.text())
-                    s['pitch_x'], s['pitch_y'] = float(px_var.text()), float(py_var.text())
-                self.draw_preview(reset_view=False)
-            except ValueError:
-                pass
+        self.active_shape_type = 'shape';
+        self.active_shape_idx = idx
+        self.update_canvas_selection()
 
     def edit_crop_dialog(self):
         dlg = QtWidgets.QDialog(self)
@@ -692,17 +844,17 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         min_x, min_y = min(pts[0][0], pts[1][0]), min(pts[0][1], pts[1][1])
         max_x, max_y = max(pts[0][0], pts[1][0]), max(pts[0][1], pts[1][1])
 
-        x_var = QtWidgets.QLineEdit(str(min_x))
+        x_var = QtWidgets.QLineEdit(str(min_x));
         y_var = QtWidgets.QLineEdit(str(min_y))
-        w_var = QtWidgets.QLineEdit(str(max_x - min_x))
+        w_var = QtWidgets.QLineEdit(str(max_x - min_x));
         h_var = QtWidgets.QLineEdit(str(max_y - min_y))
 
-        layout.addRow("X (Bottom-Left):", x_var)
+        layout.addRow("X (Bottom-Left):", x_var);
         layout.addRow("Y (Bottom-Left):", y_var)
-        layout.addRow("Width:", w_var)
+        layout.addRow("Width:", w_var);
         layout.addRow("Height:", h_var)
 
-        btn = QtWidgets.QPushButton("Update")
+        btn = QtWidgets.QPushButton("Update");
         btn.clicked.connect(dlg.accept)
         layout.addRow(btn)
 
@@ -721,22 +873,22 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         dlg = QtWidgets.QDialog(self)
         dlg.setWindowTitle("Add Text")
         layout = QtWidgets.QFormLayout(dlg)
-        t_var = QtWidgets.QLineEdit("CHIP_LABEL")
+        t_var = QtWidgets.QLineEdit("CHIP_LABEL");
         s_var = QtWidgets.QLineEdit("100.0")
-        l_var = QtWidgets.QLineEdit("10")
+        l_var = QtWidgets.QLineEdit("10");
         dt_var = QtWidgets.QLineEdit("0")
-        layout.addRow("Text:", t_var)
+        layout.addRow("Text:", t_var);
         layout.addRow("Size (um):", s_var)
-        layout.addRow("Layer:", l_var)
+        layout.addRow("Layer:", l_var);
         layout.addRow("DT:", dt_var)
-        btn = QtWidgets.QPushButton("Place on Canvas")
+        btn = QtWidgets.QPushButton("Place on Canvas");
         btn.clicked.connect(dlg.accept)
         layout.addRow(btn)
         if dlg.exec_():
             try:
                 self.draw_current_props = {'text': t_var.text(), 'size': float(s_var.text()),
                                            'layer': int(l_var.text()), 'dt': int(dt_var.text())}
-                self.draw_mode = 'text'
+                self.draw_mode = 'text';
                 self.btn_measure.setChecked(False)
                 self.status_label.setText("Text Mode: Click on Canvas to place.")
             except ValueError:
@@ -747,9 +899,9 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         dlg = QtWidgets.QDialog(self)
         dlg.setWindowTitle(f"Add {shape_type.capitalize()}")
         layout = QtWidgets.QFormLayout(dlg)
-        l_var = QtWidgets.QLineEdit("10")
+        l_var = QtWidgets.QLineEdit("10");
         dt_var = QtWidgets.QLineEdit("0")
-        layout.addRow("Layer:", l_var)
+        layout.addRow("Layer:", l_var);
         layout.addRow("DT:", dt_var)
 
         w_var = QtWidgets.QLineEdit("20.0")
@@ -770,7 +922,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             h2.addWidget(py_var);
             layout.addRow("Pitch XxY:", h2)
 
-        btn = QtWidgets.QPushButton("Start Drawing")
+        btn = QtWidgets.QPushButton("Start Drawing");
         btn.clicked.connect(dlg.accept)
         layout.addRow(btn)
         if dlg.exec_():
@@ -835,19 +987,21 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         for i, ut in enumerate(self.user_texts):
             if 'text_obj' in ut and ut['text_obj']:
                 if getattr(self, 'active_shape_type', None) == 'text' and getattr(self, 'active_shape_idx', -1) == i:
-                    ut['text_obj'].setBrush(pg.mkBrush('#FFFFFF'))
+                    ut['text_obj'].setBrush(pg.mkBrush('#00FFFF'))
                 else:
-                    ut['text_obj'].setBrush(pg.mkBrush('#00CED1'))
+                    ut['text_obj'].setBrush(pg.mkBrush('#007788'))
 
         for i, s in enumerate(self.user_shapes):
             if 'patch' in s and s['patch']:
                 if getattr(self, 'active_shape_type', None) == 'shape' and getattr(self, 'active_shape_idx', -1) == i:
-                    s['patch'].setPen(pg.mkPen('w', width=3, style=QtCore.Qt.DashLine))
+                    s['patch'].setPen(pg.mkPen('#00FFFF', width=3, style=QtCore.Qt.DashLine))
                 else:
                     ec = '#FF8C00' if s['type'] == 'box' else '#00CED1'
                     if s['type'] == 'polygon': ec = '#32CD32'
                     if s['type'] == 'path': ec = '#9370DB'
                     s['patch'].setPen(pg.mkPen(ec, width=2 if s['type'] in ['box', 'via_array'] else 1))
+
+        self.populate_inspector()
 
     def open_layer_mapping_dialog(self):
         dlg = QtWidgets.QDialog(self)
@@ -968,10 +1122,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
     def action_clear_annotations(self):
         self.save_snapshot()
         self.measurements.clear()
-        self.crop_box = None
         self.clear_active_measurement()
-        self.active_shape_type = None
-        self.active_shape_idx = -1
         self.btn_measure.setChecked(False)
         self.draw_preview(reset_view=False)
 
@@ -1082,7 +1233,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             self.inp_y.setText("0.0")
             self.draw_preview(reset_view=False)
 
-    # ================= 核心：生成物理大小一致的矢量文字 =================
     def create_text_path(self, text_str, size, x, y):
         path = QtGui.QPainterPath()
         font = QtGui.QFont("Arial")
@@ -1097,24 +1247,37 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         tr.translate(-br.left(), -br.bottom())
         return tr.map(path)
 
-    # ================== 核心：PyQtGraph 的画图逻辑 ==================
+    # ================== 核心：根据不同主题适配颜色的渲染 ==================
     def draw_preview(self, reset_view=False):
         self.canvas.clear()
         self.clear_active_measurement()
 
+        if self.is_dark_mode:
+            bg_pen_color = '#555555'
+            bg_brush_color = (25, 25, 25, 150)
+            origin_pen = 'w';
+            origin_brush = 'w'
+            no_gds_color = '#bbbbbb';
+            shadow_color = (0, 0, 0, 150)
+        else:
+            bg_pen_color = '#888888'
+            bg_brush_color = (240, 240, 240, 200)
+            origin_pen = '#555555';
+            origin_brush = '#888888'
+            no_gds_color = '#888888';
+            shadow_color = (100, 100, 100, 100)
+
         bg_rect = QtWidgets.QGraphicsRectItem(0, 0, self.block_w, self.block_h)
-        # ================= 改动：白色画布下，调整了参考矩形的笔触颜色 =================
-        bg_rect.setPen(pg.mkPen('#888888', width=2, style=QtCore.Qt.DashLine))
-        # 淡灰色填充以示区别
-        bg_rect.setBrush(pg.mkBrush(240, 240, 240, 200))
+        bg_rect.setPen(pg.mkPen(bg_pen_color, width=2, style=QtCore.Qt.DashLine))
+        bg_rect.setBrush(pg.mkBrush(*bg_brush_color))
         self.canvas.addItem(bg_rect)
 
-        dark_pen = pg.mkPen('#555555')
-        origin = pg.ScatterPlotItem([0], [0], size=15, pen=dark_pen, brush='#888888', symbol='+')
+        origin = pg.ScatterPlotItem([0], [0], size=15, pen=pg.mkPen(origin_pen, width=2), brush=origin_brush,
+                                    symbol='+')
         self.canvas.addItem(origin)
 
         if not self.gds_list:
-            text = pg.TextItem('No GDS Loaded', color='#888888', anchor=(0.5, 0.5))
+            text = pg.TextItem('No GDS Loaded', color=no_gds_color, anchor=(0.5, 0.5))
             text.setPos(self.block_w / 2, self.block_h / 2)
             self.canvas.addItem(text)
 
@@ -1125,9 +1288,8 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             sx, sy = t_box.left + gds['offset_x'], t_box.bottom + gds['offset_y']
             w, h = t_box.width(), t_box.height()
 
-            # 白色背景下阴影颜色微调
             shadow_rect = QtWidgets.QGraphicsRectItem(sx + shadow_offset, sy - shadow_offset, w, h)
-            shadow_rect.setBrush(pg.mkBrush(100, 100, 100, 100))
+            shadow_rect.setBrush(pg.mkBrush(*shadow_color))
             shadow_rect.setPen(pg.mkPen(None))
             shadow_rect.setOpacity(0.0)
             shadow_rect.setZValue(8)
@@ -1135,21 +1297,16 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             gds['shadow_patch'] = shadow_rect
 
             rect = QtWidgets.QGraphicsRectItem(sx, sy, w, h)
-            rect.setBrush(pg.mkBrush(gds['color'] + '40'))  # 透明度微调
+            rect.setBrush(pg.mkBrush(gds['color'] + '40'))
             rect.setPen(pg.mkPen(gds['color'], width=1))
             rect.setZValue(10)
             self.canvas.addItem(rect)
             gds['patch'] = rect
 
             gds['collection'] = None
-            if not self.btn_bbox.isChecked() and gds['true_polygons']:
-                path = QtGui.QPainterPath()
-                for poly in gds['true_polygons']:
-                    qpoly = QtGui.QPolygonF([QtCore.QPointF(pt[0], pt[1]) for pt in poly])
-                    path.addPolygon(qpoly)
-
-                path_item = QtWidgets.QGraphicsPathItem(path)
-                # 白色背景下，填充和笔触颜色保持鲜艳
+            if not self.btn_bbox.isChecked() and gds.get('qpath'):
+                # 瞬间加载 QPainterPath，不再遍历顶点！
+                path_item = QtWidgets.QGraphicsPathItem(gds['qpath'])
                 path_item.setBrush(pg.mkBrush(0, 0, 0, 150))
                 path_item.setPen(pg.mkPen(gds['color'], width=1))
 
@@ -1164,7 +1321,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 self.canvas.addItem(path_item)
                 gds['collection'] = path_item
 
-            # 白色背景下，文字颜色改为黑色，加一个淡色背景提高清晰度
             text = pg.TextItem(gds['name'], color='w', anchor=(0.5, 0.5), fill=pg.mkBrush(0, 0, 0, 180))
             text.setPos(sx + w / 2, sy + h / 2)
             text.setZValue(90)
@@ -1173,19 +1329,18 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
 
         for m in self.measurements:
             line = QtWidgets.QGraphicsLineItem(m['x0'], m['y0'], m['x1'], m['y1'])
-            # 保持 KLayout 的高亮黄色，在白底下加黑边效果
             line.setPen(pg.mkPen('#FF8800', width=2, style=QtCore.Qt.DashLine))
             self.canvas.addItem(line)
 
             info = f"L: {math.hypot(m['x1'] - m['x0'], m['y1'] - m['y0']):.2f}\ndx: {abs(m['x1'] - m['x0']):.2f}\ndy: {abs(m['y1'] - m['y0']):.2f}"
-            t = pg.TextItem(info, color='w', anchor=(0, 1), fill=pg.mkBrush(20, 20, 0, 220))
+            t = pg.TextItem(info, color='#FFFF00', anchor=(0, 1), fill=pg.mkBrush(0, 0, 0, 200))
             t.setPos(m['x1'], m['y1'])
             self.canvas.addItem(t)
 
         for ut in self.user_texts:
             path = self.create_text_path(ut['text'], ut['size'], ut['x'], ut['y'])
             text_item = QtWidgets.QGraphicsPathItem(path)
-            text_item.setBrush(pg.mkBrush('#007788'))  # 颜色加深提高白底可读性
+            text_item.setBrush(pg.mkBrush('#007788'))
             text_item.setPen(pg.mkPen(None))
             text_item.setZValue(250)
             self.canvas.addItem(text_item)
@@ -1199,7 +1354,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 rect = QtWidgets.QGraphicsRectItem(min(x0, x1), min(y0, y1), abs(x1 - x0), abs(y1 - y0))
 
                 if s['type'] == 'box':
-                    # 橙色加深
                     rect.setBrush(pg.mkBrush(220, 110, 0, 80))
                     rect.setPen(pg.mkPen('#CC6600', width=2))
                 else:
@@ -1212,7 +1366,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             elif s['type'] == 'polygon':
                 qpoly = QtGui.QPolygonF([QtCore.QPointF(x, y) for x, y in s['points']])
                 poly = QtWidgets.QGraphicsPolygonItem(qpoly)
-                # 绿色加深
                 poly.setBrush(pg.mkBrush(0, 150, 0, 80))
                 poly.setPen(pg.mkPen('#007700', width=1))
                 poly.setZValue(240)
@@ -1225,7 +1378,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                     hull_pts = [(pt.x, pt.y) for pt in db.DPath(pts, s['width']).polygon().each_point_hull()]
                     qpoly = QtGui.QPolygonF([QtCore.QPointF(x, y) for x, y in hull_pts])
                     poly = QtWidgets.QGraphicsPolygonItem(qpoly)
-                    # 紫色加深
                     poly.setBrush(pg.mkBrush(100, 0, 150, 80))
                     poly.setPen(pg.mkPen('#550088', width=1))
                     poly.setZValue(240)
@@ -1252,22 +1404,16 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             self.canvas.setXRange(-self.block_w * 0.1, self.block_w * 1.1, padding=0)
             self.canvas.setYRange(-self.block_h * 0.1, self.block_h * 1.1, padding=0)
 
-    # ================= 精准的射线碰撞检测 =================
     def is_hit(self, x, y, item):
         if not item: return False
         pt = QtCore.QPointF(x, y)
-
         if isinstance(item, (QtWidgets.QGraphicsRectItem, QtWidgets.QGraphicsPolygonItem, QtWidgets.QGraphicsPathItem)):
             return item.contains(pt)
-
         scene_pt = self.canvas.plotItem.vb.mapViewToScene(pt)
         local_pt = item.mapFromScene(scene_pt)
-        if isinstance(item, pg.TextItem):
-            return item.boundingRect().contains(local_pt)
-
+        if isinstance(item, pg.TextItem): return item.boundingRect().contains(local_pt)
         return item.contains(local_pt)
 
-    # ================= 鼠标坐标计算与吸附 =================
     def get_snapped_coordinate(self, x, y):
         view_range = self.canvas.viewRange()
         cur_xlim, cur_ylim = view_range[0], view_range[1]
@@ -1294,7 +1440,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         if abs(nx - ref_pt[0]) > abs(ny - ref_pt[1]): return nx, ref_pt[1]
         return ref_pt[0], ny
 
-    # ================== 核心：绘制落笔与保存 ==================
     def finalize_shape(self):
         self.save_snapshot()
         if self.draw_mode == 'crop':
@@ -1306,33 +1451,11 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         self.cancel_draw_mode()
         self.draw_preview(reset_view=False)
 
-    # ================== 核心：鼠标事件分发处理 ==================
-    def handle_mouse_doubleclick(self, x, y):
-        for i in range(len(self.user_texts) - 1, -1, -1):
-            if 'text_obj' in self.user_texts[i] and self.is_hit(x, y, self.user_texts[i]['text_obj']):
-                self.edit_text_dialog(i);
-                return
-        for i in range(len(self.user_shapes) - 1, -1, -1):
-            if 'patch' in self.user_shapes[i] and self.is_hit(x, y, self.user_shapes[i]['patch']):
-                self.edit_shape_dialog(i);
-                return
-
-        if getattr(self, 'crop_rect_item', None) and self.is_hit(x, y, self.crop_rect_item):
-            self.edit_crop_dialog()
-            return
-
-        if self.draw_mode in ['polygon', 'path']:
-            if len(self.draw_points) >= (3 if self.draw_mode == 'polygon' else 2):
-                self.finalize_shape()
-            else:
-                self.cancel_draw_mode()
-
     def handle_mouse_click(self, x, y, is_double=False, button=QtCore.Qt.LeftButton):
         if button == QtCore.Qt.RightButton:
             clicked_idx = next(
                 (i for i in range(len(self.gds_list) - 1, -1, -1) if self.is_hit(x, y, self.gds_list[i]['patch'])), -1)
-            if clicked_idx != -1:
-                self.show_context_menu(clicked_idx)
+            if clicked_idx != -1: self.show_context_menu(clicked_idx)
             return
 
         snap_x, snap_y, _, _ = self.get_snapped_coordinate(x, y)
@@ -1354,8 +1477,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             if not self.draw_points:
                 self.draw_points.append((snap_x, snap_y))
             else:
-                self.draw_points.append((snap_x, snap_y))
-                self.finalize_shape()
+                self.draw_points.append((snap_x, snap_y)); self.finalize_shape()
             return
         elif self.draw_mode in ['polygon', 'path']:
             self.draw_points.append((snap_x, snap_y))
@@ -1366,11 +1488,10 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 self.clear_active_measurement()
                 self.measure_start_pt = (snap_x, snap_y)
                 self.measure_line = QtWidgets.QGraphicsLineItem(snap_x, snap_y, snap_x, snap_y)
-                # 高亮橙色测量尺
                 self.measure_line.setPen(pg.mkPen('#FF8800', width=2, style=QtCore.Qt.DashLine))
                 self.measure_line.setZValue(300)
                 self.canvas.addItem(self.measure_line)
-                self.measure_text = pg.TextItem('', color='w', fill=pg.mkBrush(20, 20, 0, 220))
+                self.measure_text = pg.TextItem('', color='#FFFF00', fill=pg.mkBrush(0, 0, 0, 200))
                 self.measure_text.setPos(snap_x, snap_y)
                 self.canvas.addItem(self.measure_text)
                 self.measure_state = 1
@@ -1385,12 +1506,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         self._process_selection_at(x, y, prepare_drag=False)
 
     def handle_mouse_press(self, x, y):
-        snap_x, snap_y, _, _ = self.get_snapped_coordinate(x, y)
-        if self.ctrl_pressed:
-            if self.btn_measure.isChecked() and self.measure_start_pt:
-                snap_x, snap_y = self.apply_ortho(snap_x, snap_y, self.measure_start_pt)
-            elif self.draw_mode in ['polygon', 'path'] and self.draw_points:
-                snap_x, snap_y = self.apply_ortho(snap_x, snap_y, self.draw_points[-1])
         pass
 
     def handle_drag_start(self, x, y):
@@ -1398,9 +1513,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         if self.draw_mode in ['box', 'via_array', 'crop'] and not self.draw_points:
             self.draw_points.append((snap_x, snap_y))
             return
-        if self.draw_mode is not None or self.btn_measure.isChecked():
-            return
-
+        if self.draw_mode is not None or self.btn_measure.isChecked(): return
         self._process_selection_at(x, y, prepare_drag=True)
 
     def _process_selection_at(self, x, y, prepare_drag=False):
@@ -1437,8 +1550,8 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         clicked_idx = next(
             (i for i in range(len(self.gds_list) - 1, -1, -1) if self.is_hit(x, y, self.gds_list[i]['patch'])), -1)
         if clicked_idx != -1:
-            self.active_shape_type = None;
-            self.active_shape_idx = -1
+            self.active_shape_type = 'gds';
+            self.active_shape_idx = clicked_idx
             current_selection = [self.list_widget.row(item) for item in self.list_widget.selectedItems()]
             self.list_widget.blockSignals(True)
             if self.ctrl_pressed:
@@ -1507,20 +1620,17 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                                              snap_y)
                 if not self.temp_draw_preview:
                     self.temp_draw_preview = QtWidgets.QGraphicsPathItem(path)
-                    # 颜色加深
                     self.temp_draw_preview.setBrush(pg.mkBrush('#007788'))
                     self.temp_draw_preview.setPen(pg.mkPen(None))
                     self.temp_draw_preview.setZValue(350)
                     self.canvas.addItem(self.temp_draw_preview)
                 else:
                     self.temp_draw_preview.setPath(path)
-
             elif self.draw_mode in ['box', 'via_array', 'crop'] and len(self.draw_points) == 1:
                 x0, y0 = self.draw_points[0]
                 if not self.temp_draw_preview:
                     self.temp_draw_preview = QtWidgets.QGraphicsRectItem(min(x0, snap_x), min(y0, snap_y),
                                                                          abs(snap_x - x0), abs(snap_y - y0))
-                    # 预览线加粗深颜色
                     self.temp_draw_preview.setPen(pg.mkPen('#CC6600', width=2, style=QtCore.Qt.DashLine))
                     self.canvas.addItem(self.temp_draw_preview)
                 else:
@@ -1537,15 +1647,13 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
 
                 if not self.temp_draw_preview:
                     self.temp_draw_preview = QtWidgets.QGraphicsPathItem(path)
-                    dark_preview_pen = '#CC6600'
-                    self.temp_draw_preview.setPen(pg.mkPen(dark_preview_pen, width=2, style=QtCore.Qt.DashLine))
+                    self.temp_draw_preview.setPen(pg.mkPen('#CC6600', width=2, style=QtCore.Qt.DashLine))
                     self.canvas.addItem(self.temp_draw_preview)
                 else:
                     self.temp_draw_preview.setPath(path)
             return
 
         if self.btn_measure.isChecked():
-            # 标记颜色调整
             indicator_color = '#FF8800'
             if not self.snap_indicator:
                 self.snap_indicator = pg.ScatterPlotItem([snap_x], [snap_y], size=12,
@@ -1594,6 +1702,11 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             ut = self.user_texts[self.dragging_idx]
             path = self.create_text_path(ut['text'], ut['size'], nx, ny)
             ut['text_obj'].setPath(path)
+
+            # 实时更新属性面板
+            if self.active_shape_type == 'text':
+                self.prop_x_inp.setText(f"{nx:.3f}");
+                self.prop_y_inp.setText(f"{ny:.3f}")
             return
 
         if self.dragging_type == 'shape':
@@ -1621,6 +1734,10 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 if len(pts) >= 2:
                     hull_pts = [(pt.x, pt.y) for pt in db.DPath(pts, s['width']).polygon().each_point_hull()]
                     s['patch'].setPolygon(QtGui.QPolygonF([QtCore.QPointF(px, py) for px, py in hull_pts]))
+
+            if self.active_shape_type == 'shape':
+                self.prop_x_inp.setText(f"{min(x0, x1) if s['type'] in ['box', 'via_array'] else new_pts[0][0]:.3f}")
+                self.prop_y_inp.setText(f"{min(y0, y1) if s['type'] in ['box', 'via_array'] else new_pts[0][1]:.3f}")
             return
 
         for line in self.guide_lines: self.canvas.removeItem(line)
@@ -1655,8 +1772,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
 
         if not is_grid_snapped:
             drag_x_pois, drag_y_pois = self.get_pois(handle_gds, temp_ox, temp_oy)
-            # 白色背景下吸附线颜色改为高亮黄色
-            guide_marker_color = '#FFFF00'
             min_dx, min_dy = (self.canvas.viewRange()[0][1] - self.canvas.viewRange()[0][0]) * 0.02, (
                         self.canvas.viewRange()[1][1] - self.canvas.viewRange()[1][0]) * 0.02
             snap_shift_x, snap_shift_y = 0, 0
@@ -1716,6 +1831,9 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             cx, cy = self.get_anchor_coords(handle_gds, self.cb_anchor.currentText())
             self.inp_x.setText(f"{cx:.3f}");
             self.inp_y.setText(f"{cy:.3f}")
+            if self.active_shape_type == 'gds':
+                self.prop_x_inp.setText(f"{cx:.3f}");
+                self.prop_y_inp.setText(f"{cy:.3f}")
 
     def show_context_menu(self, idx):
         menu = QtWidgets.QMenu(self)
@@ -2046,8 +2164,6 @@ if __name__ == "__main__":
 
     app = QtWidgets.QApplication(sys.argv)
     app.setStyle("Fusion")
-
-    # 移除强制暗黑主题，恢复系统默认 Fusion 主题（亮色明快）
 
     window = GDSMergerProQt()
     window.show()

@@ -6,7 +6,7 @@ import subprocess
 def main():
     # ⚠️ 确保你刚才写的带有 UI 的主程序文件名为 "merge_gds_ui.py"
     target_script = "merge_gds_ui.py"
-    app_name = "GDS_MERGER_1.0"
+    app_name = "WaferForge_GDS_Assembler"  # 更新了更酷的软件名
     icon_png = "icon.png"
     icon_ico = "icon.ico"
 
@@ -16,7 +16,7 @@ def main():
         print("请确保打包脚本与你的 UI 脚本在同一个文件夹内。")
         sys.exit(1)
 
-    # 2. 自动检查并安装 PyInstaller 和 Pillow (用于图片转换)
+    # 2. 自动检查并安装必备的打包库
     try:
         import PyInstaller
         print("✅ 检测到已安装 PyInstaller。")
@@ -60,21 +60,29 @@ def main():
         use_icon = True
         print(f"✅ 发现已存在的 {icon_ico}。")
     else:
-        print(f"ℹ️ 未在目录下找到 {icon_png}，将使用系统默认图标。")
+        print(f"ℹ️ 未在目录下找到 {icon_png} 或 {icon_ico}，将使用系统默认图标。")
 
     # 4. 配置打包参数
     print(f"\n🚀 开始将 {target_script} 打包为独立的 .exe 程序...")
 
     pyinstaller_args = [
         target_script,
-        f'--name={app_name}',           # 生成的 exe 名字
-        '--onefile',                    # 将所有依赖打包进一个单一的 .exe 文件中
-        '--windowed',                   # 运行时不显示黑色的控制台/命令行窗口 (注：如果生成的exe运行无反应，可改成 '--console' 看报错)
-        '--clean',                      # 每次打包前清理之前的缓存
-        '--hidden-import=klayout.db',   # 隐式导入 klayout 模块
-        '--collect-all=klayout',        # 强制收集 klayout 底层的所有 C++ 动态库和插件
-        '--collect-all=matplotlib',     # 👈 【核心新增】强制收集 matplotlib 的画图引擎、字体和后端组件，防止 UI 闪退！
-        '--log-level=WARN',             # 只输出警告和错误信息，保持终端清爽
+        f'--name={app_name}',
+        '--onefile',
+        '--windowed',
+        '--clean',
+        '--hidden-import=klayout.db',
+        '--collect-all=klayout',
+        '--hidden-import=pyqtgraph',
+        '--hidden-import=PyQt5',
+
+        # 🚀 【修复核心】强制排除其他干扰的 Qt 库和不需要的 OpenGL 模块
+        '--exclude-module=PySide2',
+        '--exclude-module=PySide6',
+        '--exclude-module=PyQt6',
+        '--exclude-module=OpenGL',
+
+        '--log-level=WARN',
     ]
 
     # 如果图标存在且可用，把图标参数加进打包配置里
