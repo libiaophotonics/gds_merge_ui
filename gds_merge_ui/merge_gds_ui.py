@@ -109,7 +109,8 @@ class GDSViewBox(pg.ViewBox):
 class GDSMergerProQt(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("GDS MERGER Pro - Advanced Mask Prep Tool (PyQtGraph 终极完全版)")
+        # ================= 核心：更新了软件标题 =================
+        self.setWindowTitle("**WaferForge GDS Assembler**")
         self.resize(1300, 800)
         self.setAcceptDrops(True)
 
@@ -134,8 +135,9 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
 
         self.block_w, self.block_h = 5000.0, 5000.0
         self.top_cell_name = "MERGED_CHIP"
-        self.color_palette = ['#1f77b4', '#d62728', '#2ca02c', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22',
-                              '#17becf']
+        # 换成了 KLayout 经典的高饱和度图层配色，在白底下依然亮眼
+        self.color_palette = ['#FF0000', '#009900', '#0000FF', '#00FFFF', '#FF00FF', '#999900', '#FF8000', '#00FF80',
+                              '#8000FF']
 
         self.setup_ui()
         self.draw_preview(reset_view=True)
@@ -361,7 +363,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         tb2.addWidget(btn_clear)
 
         btn_bool = QtWidgets.QPushButton("🔣 Boolean")
-        btn_bool.setStyleSheet("color: #FF8C00; font-weight: bold;")
+        btn_bool.setStyleSheet("color: #d35400; font-weight: bold;")
         btn_bool.clicked.connect(self.action_boolean_dialog)
         tb2.addWidget(btn_bool)
 
@@ -376,20 +378,22 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         tb2.addStretch()
         center_layout.addLayout(tb2)
 
-        # ================== 核心：PyQtGraph 画布控件 ==================
+        # ================== 核心：PyQtGraph 画布控件，换成了白色背景 ==================
         view_box = GDSViewBox(self)
         self.canvas = pg.PlotWidget(viewBox=view_box)
-        self.canvas.setBackground('#1e1e1e')
-        self.canvas.showGrid(x=True, y=True, alpha=0.4)
+        self.canvas.setBackground('#FFFFFF')
+        self.canvas.showGrid(x=True, y=True, alpha=0.3)
         self.canvas.setAspectLocked(True)
         self.canvas.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
 
+        # 恢复坐标轴显示，调整 pen 为深灰色以适配白色背景
         ax_left = self.canvas.getAxis('left')
         ax_bottom = self.canvas.getAxis('bottom')
-        ax_left.setPen(pg.mkPen('#555555'));
-        ax_left.setTextPen(pg.mkPen('#aaaaaa'))
-        ax_bottom.setPen(pg.mkPen('#555555'));
-        ax_bottom.setTextPen(pg.mkPen('#aaaaaa'))
+        dark_pen = pg.mkPen('#555555')
+        ax_left.setPen(dark_pen);
+        ax_left.setTextPen(dark_pen)
+        ax_bottom.setPen(dark_pen);
+        ax_bottom.setTextPen(dark_pen)
 
         center_layout.addWidget(self.canvas, 1)
 
@@ -1099,27 +1103,31 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         self.clear_active_measurement()
 
         bg_rect = QtWidgets.QGraphicsRectItem(0, 0, self.block_w, self.block_h)
-        bg_rect.setPen(pg.mkPen('#555555', width=2, style=QtCore.Qt.DashLine))
-        bg_rect.setBrush(pg.mkBrush(25, 25, 25, 150))
+        # ================= 改动：白色画布下，调整了参考矩形的笔触颜色 =================
+        bg_rect.setPen(pg.mkPen('#888888', width=2, style=QtCore.Qt.DashLine))
+        # 淡灰色填充以示区别
+        bg_rect.setBrush(pg.mkBrush(240, 240, 240, 200))
         self.canvas.addItem(bg_rect)
 
-        origin = pg.ScatterPlotItem([0], [0], size=15, pen=pg.mkPen('w', width=2), brush='w', symbol='+')
+        dark_pen = pg.mkPen('#555555')
+        origin = pg.ScatterPlotItem([0], [0], size=15, pen=dark_pen, brush='#888888', symbol='+')
         self.canvas.addItem(origin)
 
         if not self.gds_list:
-            text = pg.TextItem('No GDS Loaded', color='#bbbbbb', anchor=(0.5, 0.5))
+            text = pg.TextItem('No GDS Loaded', color='#888888', anchor=(0.5, 0.5))
             text.setPos(self.block_w / 2, self.block_h / 2)
             self.canvas.addItem(text)
 
-        shadow_offset = min(self.block_w, self.block_h) * 0.015
+        shadow_offset = min(self.block_w, self.block_h) * 0.01
 
         for gds in self.gds_list:
             t_box = gds['trans'] * gds['base_bbox']
             sx, sy = t_box.left + gds['offset_x'], t_box.bottom + gds['offset_y']
             w, h = t_box.width(), t_box.height()
 
+            # 白色背景下阴影颜色微调
             shadow_rect = QtWidgets.QGraphicsRectItem(sx + shadow_offset, sy - shadow_offset, w, h)
-            shadow_rect.setBrush(pg.mkBrush(0, 0, 0, 150))
+            shadow_rect.setBrush(pg.mkBrush(100, 100, 100, 100))
             shadow_rect.setPen(pg.mkPen(None))
             shadow_rect.setOpacity(0.0)
             shadow_rect.setZValue(8)
@@ -1127,7 +1135,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             gds['shadow_patch'] = shadow_rect
 
             rect = QtWidgets.QGraphicsRectItem(sx, sy, w, h)
-            rect.setBrush(pg.mkBrush(gds['color'] + '60'))
+            rect.setBrush(pg.mkBrush(gds['color'] + '40'))  # 透明度微调
             rect.setPen(pg.mkPen(gds['color'], width=1))
             rect.setZValue(10)
             self.canvas.addItem(rect)
@@ -1141,8 +1149,9 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                     path.addPolygon(qpoly)
 
                 path_item = QtWidgets.QGraphicsPathItem(path)
+                # 白色背景下，填充和笔触颜色保持鲜艳
                 path_item.setBrush(pg.mkBrush(0, 0, 0, 150))
-                path_item.setPen(pg.mkPen(gds['color'] + 'E0', width=1))
+                path_item.setPen(pg.mkPen(gds['color'], width=1))
 
                 tr = QtGui.QTransform()
                 tr.translate(gds['offset_x'], gds['offset_y'])
@@ -1155,8 +1164,8 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 self.canvas.addItem(path_item)
                 gds['collection'] = path_item
 
-            ratio = min(w, h) / min(self.block_w, self.block_h) if min(self.block_w, self.block_h) > 0 else 1.0
-            text = pg.TextItem(gds['name'], color='w', anchor=(0.5, 0.5))
+            # 白色背景下，文字颜色改为黑色，加一个淡色背景提高清晰度
+            text = pg.TextItem(gds['name'], color='w', anchor=(0.5, 0.5), fill=pg.mkBrush(0, 0, 0, 180))
             text.setPos(sx + w / 2, sy + h / 2)
             text.setZValue(90)
             self.canvas.addItem(text)
@@ -1164,18 +1173,19 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
 
         for m in self.measurements:
             line = QtWidgets.QGraphicsLineItem(m['x0'], m['y0'], m['x1'], m['y1'])
-            line.setPen(pg.mkPen('#FF1493', width=2, style=QtCore.Qt.DashLine))
+            # 保持 KLayout 的高亮黄色，在白底下加黑边效果
+            line.setPen(pg.mkPen('#FF8800', width=2, style=QtCore.Qt.DashLine))
             self.canvas.addItem(line)
 
             info = f"L: {math.hypot(m['x1'] - m['x0'], m['y1'] - m['y0']):.2f}\ndx: {abs(m['x1'] - m['x0']):.2f}\ndy: {abs(m['y1'] - m['y0']):.2f}"
-            t = pg.TextItem(info, color='#FF1493', anchor=(0, 1), fill=pg.mkBrush(0, 0, 0, 200))
+            t = pg.TextItem(info, color='w', anchor=(0, 1), fill=pg.mkBrush(20, 20, 0, 220))
             t.setPos(m['x1'], m['y1'])
             self.canvas.addItem(t)
 
         for ut in self.user_texts:
             path = self.create_text_path(ut['text'], ut['size'], ut['x'], ut['y'])
             text_item = QtWidgets.QGraphicsPathItem(path)
-            text_item.setBrush(pg.mkBrush('#00CED1'))
+            text_item.setBrush(pg.mkBrush('#007788'))  # 颜色加深提高白底可读性
             text_item.setPen(pg.mkPen(None))
             text_item.setZValue(250)
             self.canvas.addItem(text_item)
@@ -1189,11 +1199,12 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 rect = QtWidgets.QGraphicsRectItem(min(x0, x1), min(y0, y1), abs(x1 - x0), abs(y1 - y0))
 
                 if s['type'] == 'box':
-                    rect.setBrush(pg.mkBrush(255, 140, 0, 120))
-                    rect.setPen(pg.mkPen('#FF8C00', width=2))
+                    # 橙色加深
+                    rect.setBrush(pg.mkBrush(220, 110, 0, 80))
+                    rect.setPen(pg.mkPen('#CC6600', width=2))
                 else:
                     rect.setBrush(pg.mkBrush(0, 0, 0, 0))
-                    rect.setPen(pg.mkPen('#00CED1', width=2, style=QtCore.Qt.DotLine))
+                    rect.setPen(pg.mkPen('#007788', width=2, style=QtCore.Qt.DotLine))
                 rect.setZValue(240)
                 self.canvas.addItem(rect)
                 s['patch'] = rect
@@ -1201,8 +1212,9 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             elif s['type'] == 'polygon':
                 qpoly = QtGui.QPolygonF([QtCore.QPointF(x, y) for x, y in s['points']])
                 poly = QtWidgets.QGraphicsPolygonItem(qpoly)
-                poly.setBrush(pg.mkBrush(50, 205, 50, 120))
-                poly.setPen(pg.mkPen('#32CD32', width=1))
+                # 绿色加深
+                poly.setBrush(pg.mkBrush(0, 150, 0, 80))
+                poly.setPen(pg.mkPen('#007700', width=1))
                 poly.setZValue(240)
                 self.canvas.addItem(poly)
                 s['patch'] = poly
@@ -1213,8 +1225,9 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                     hull_pts = [(pt.x, pt.y) for pt in db.DPath(pts, s['width']).polygon().each_point_hull()]
                     qpoly = QtGui.QPolygonF([QtCore.QPointF(x, y) for x, y in hull_pts])
                     poly = QtWidgets.QGraphicsPolygonItem(qpoly)
-                    poly.setBrush(pg.mkBrush(147, 112, 219, 120))
-                    poly.setPen(pg.mkPen('#9370DB', width=1))
+                    # 紫色加深
+                    poly.setBrush(pg.mkBrush(100, 0, 150, 80))
+                    poly.setPen(pg.mkPen('#550088', width=1))
                     poly.setZValue(240)
                     self.canvas.addItem(poly)
                     s['patch'] = poly
@@ -1225,7 +1238,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             x1, y1 = pts[1]
             rect = QtWidgets.QGraphicsRectItem(min(x0, x1), min(y0, y1), abs(x1 - x0), abs(y1 - y0))
             rect.setPen(pg.mkPen('r', width=3, style=QtCore.Qt.DashLine))
-            rect.setBrush(pg.mkBrush(255, 0, 0, 20))
+            rect.setBrush(pg.mkBrush(255, 0, 0, 15))
             rect.setZValue(400)
             self.canvas.addItem(rect)
             self.crop_rect_item = rect
@@ -1353,10 +1366,11 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 self.clear_active_measurement()
                 self.measure_start_pt = (snap_x, snap_y)
                 self.measure_line = QtWidgets.QGraphicsLineItem(snap_x, snap_y, snap_x, snap_y)
-                self.measure_line.setPen(pg.mkPen('#FF1493', width=2, style=QtCore.Qt.DashLine))
+                # 高亮橙色测量尺
+                self.measure_line.setPen(pg.mkPen('#FF8800', width=2, style=QtCore.Qt.DashLine))
                 self.measure_line.setZValue(300)
                 self.canvas.addItem(self.measure_line)
-                self.measure_text = pg.TextItem('', color='#FF1493', fill=pg.mkBrush(0, 0, 0, 200))
+                self.measure_text = pg.TextItem('', color='w', fill=pg.mkBrush(20, 20, 0, 220))
                 self.measure_text.setPos(snap_x, snap_y)
                 self.canvas.addItem(self.measure_text)
                 self.measure_state = 1
@@ -1493,7 +1507,8 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                                              snap_y)
                 if not self.temp_draw_preview:
                     self.temp_draw_preview = QtWidgets.QGraphicsPathItem(path)
-                    self.temp_draw_preview.setBrush(pg.mkBrush('#00CED1'))
+                    # 颜色加深
+                    self.temp_draw_preview.setBrush(pg.mkBrush('#007788'))
                     self.temp_draw_preview.setPen(pg.mkPen(None))
                     self.temp_draw_preview.setZValue(350)
                     self.canvas.addItem(self.temp_draw_preview)
@@ -1505,7 +1520,8 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 if not self.temp_draw_preview:
                     self.temp_draw_preview = QtWidgets.QGraphicsRectItem(min(x0, snap_x), min(y0, snap_y),
                                                                          abs(snap_x - x0), abs(snap_y - y0))
-                    self.temp_draw_preview.setPen(pg.mkPen('y', width=2, style=QtCore.Qt.DashLine))
+                    # 预览线加粗深颜色
+                    self.temp_draw_preview.setPen(pg.mkPen('#CC6600', width=2, style=QtCore.Qt.DashLine))
                     self.canvas.addItem(self.temp_draw_preview)
                 else:
                     self.temp_draw_preview.setRect(min(x0, snap_x), min(y0, snap_y), abs(snap_x - x0), abs(snap_y - y0))
@@ -1521,28 +1537,33 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
 
                 if not self.temp_draw_preview:
                     self.temp_draw_preview = QtWidgets.QGraphicsPathItem(path)
-                    self.temp_draw_preview.setPen(pg.mkPen('y', width=2, style=QtCore.Qt.DashLine))
+                    dark_preview_pen = '#CC6600'
+                    self.temp_draw_preview.setPen(pg.mkPen(dark_preview_pen, width=2, style=QtCore.Qt.DashLine))
                     self.canvas.addItem(self.temp_draw_preview)
                 else:
                     self.temp_draw_preview.setPath(path)
             return
 
         if self.btn_measure.isChecked():
+            # 标记颜色调整
+            indicator_color = '#FF8800'
             if not self.snap_indicator:
-                self.snap_indicator = pg.ScatterPlotItem([snap_x], [snap_y], size=12, pen=pg.mkPen('r', width=2),
-                                                         brush='r', symbol='+')
+                self.snap_indicator = pg.ScatterPlotItem([snap_x], [snap_y], size=12,
+                                                         pen=pg.mkPen(indicator_color, width=2), brush=indicator_color,
+                                                         symbol='+')
                 self.canvas.addItem(self.snap_indicator)
             else:
                 self.snap_indicator.setData([snap_x], [snap_y])
 
             for line in self.guide_lines: self.canvas.removeItem(line)
             self.guide_lines.clear()
+            guide_pen = pg.mkPen(indicator_color, width=1.5, style=QtCore.Qt.DashLine)
             if sn_x:
-                l = pg.InfiniteLine(pos=snap_x, angle=90, pen=pg.mkPen('#FF8C00', width=1.5, style=QtCore.Qt.DashLine))
+                l = pg.InfiniteLine(pos=snap_x, angle=90, pen=guide_pen)
                 self.canvas.addItem(l);
                 self.guide_lines.append(l)
             if sn_y:
-                l = pg.InfiniteLine(pos=snap_y, angle=0, pen=pg.mkPen('#FF8C00', width=1.5, style=QtCore.Qt.DashLine))
+                l = pg.InfiniteLine(pos=snap_y, angle=0, pen=guide_pen)
                 self.canvas.addItem(l);
                 self.guide_lines.append(l)
 
@@ -1634,6 +1655,8 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
 
         if not is_grid_snapped:
             drag_x_pois, drag_y_pois = self.get_pois(handle_gds, temp_ox, temp_oy)
+            # 白色背景下吸附线颜色改为高亮黄色
+            guide_marker_color = '#FFFF00'
             min_dx, min_dy = (self.canvas.viewRange()[0][1] - self.canvas.viewRange()[0][0]) * 0.02, (
                         self.canvas.viewRange()[1][1] - self.canvas.viewRange()[1][0]) * 0.02
             snap_shift_x, snap_shift_y = 0, 0
@@ -1678,14 +1701,13 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 gds['collection'].setTransform(tr)
 
         if not is_grid_snapped:
+            guide_pen = pg.mkPen('#FF8800', width=1.5, style=QtCore.Qt.DashLine)
             if best_snap_x is not None:
-                l = pg.InfiniteLine(pos=best_snap_x, angle=90,
-                                    pen=pg.mkPen('#FF8C00', width=1.5, style=QtCore.Qt.DashLine))
+                l = pg.InfiniteLine(pos=best_snap_x, angle=90, pen=guide_pen)
                 self.canvas.addItem(l);
                 self.guide_lines.append(l)
             if best_snap_y is not None:
-                l = pg.InfiniteLine(pos=best_snap_y, angle=0,
-                                    pen=pg.mkPen('#FF8C00', width=1.5, style=QtCore.Qt.DashLine))
+                l = pg.InfiniteLine(pos=best_snap_y, angle=0, pen=guide_pen)
                 self.canvas.addItem(l);
                 self.guide_lines.append(l)
 
@@ -2025,21 +2047,7 @@ if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)
     app.setStyle("Fusion")
 
-    palette = QtGui.QPalette()
-    palette.setColor(QtGui.QPalette.Window, QtGui.QColor(43, 43, 43))
-    palette.setColor(QtGui.QPalette.WindowText, QtCore.Qt.white)
-    palette.setColor(QtGui.QPalette.Base, QtGui.QColor(25, 25, 25))
-    palette.setColor(QtGui.QPalette.AlternateBase, QtGui.QColor(43, 43, 43))
-    palette.setColor(QtGui.QPalette.ToolTipBase, QtCore.Qt.white)
-    palette.setColor(QtGui.QPalette.ToolTipText, QtCore.Qt.white)
-    palette.setColor(QtGui.QPalette.Text, QtCore.Qt.white)
-    palette.setColor(QtGui.QPalette.Button, QtGui.QColor(53, 53, 53))
-    palette.setColor(QtGui.QPalette.ButtonText, QtCore.Qt.white)
-    palette.setColor(QtGui.QPalette.BrightText, QtCore.Qt.red)
-    palette.setColor(QtGui.QPalette.Link, QtGui.QColor(42, 130, 218))
-    palette.setColor(QtGui.QPalette.Highlight, QtGui.QColor(42, 130, 218))
-    palette.setColor(QtGui.QPalette.HighlightedText, QtCore.Qt.black)
-    app.setPalette(palette)
+    # 移除强制暗黑主题，恢复系统默认 Fusion 主题（亮色明快）
 
     window = GDSMergerProQt()
     window.show()
