@@ -488,8 +488,9 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         props_layout.addRow(btn_prop_apply)
         right_layout.addWidget(grp_props, 0)
 
-        grp_slot = QtWidgets.QGroupBox("🧀 Advanced Slotting")
-        slot_layout = QtWidgets.QFormLayout(grp_slot)
+        # ====== 智能上下文 Slot 面板 ======
+        self.grp_slot = QtWidgets.QGroupBox("🧀 Advanced Slotting")
+        slot_layout = QtWidgets.QFormLayout(self.grp_slot)
 
         self.slot_layer_inp = QtWidgets.QLineEdit("10/0")
         h1 = QtWidgets.QHBoxLayout()
@@ -518,7 +519,8 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         btn_slot.clicked.connect(self.action_execute_slotting)
         slot_layout.addRow(btn_slot)
 
-        right_layout.addWidget(grp_slot, 0)
+        right_layout.addWidget(self.grp_slot, 0)
+        self.grp_slot.setVisible(False)  # 默认隐藏面板
 
         self.main_splitter.addWidget(left_panel)
         self.main_splitter.addWidget(center_panel)
@@ -921,6 +923,11 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             self.prop_l_inp.clear();
             self.prop_d_inp.clear()
 
+        # 动态控制“开槽面板”的显示与隐藏
+        if hasattr(self, 'grp_slot'):
+            show_slot_panel = (self.draw_mode == 'slot') or (self.active_shape_type == 'slot')
+            self.grp_slot.setVisible(show_slot_panel)
+
     def apply_inspector_properties(self):
         if self.active_shape_type == 'gds' and self.active_shape_idx != -1:
             self.save_snapshot()
@@ -1253,10 +1260,11 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             try:
                 self.draw_current_props = {'text': t_var.text(), 'size': float(s_var.text()),
                                            'layer': int(l_var.text()), 'dt': int(dt_var.text()),
-                                           'rot': 0, 'mirror_x': False}  # Added default text transformations
+                                           'rot': 0, 'mirror_x': False}
                 self.draw_mode = 'text';
                 self.btn_measure.setChecked(False)
                 self.status_label.setText("Text Mode: Click on Canvas to place.")
+                self.populate_inspector()
             except ValueError:
                 pass
 
@@ -1306,6 +1314,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 self.btn_measure.setChecked(False)
                 self.status_label.setText(
                     f"{shape_type.capitalize()} Mode active. (拖拽 或 点击 两下绘制Box；单击连线，右键完成Polygon/Path)")
+                self.populate_inspector()
             except ValueError:
                 pass
 
@@ -1315,6 +1324,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         self.draw_points = []
         self.btn_measure.setChecked(False)
         self.status_label.setText("Crop Mode: Drag to define crop area.")
+        self.populate_inspector()
 
     def action_draw_slot_box(self):
         self.cancel_draw_mode()
@@ -1322,6 +1332,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         self.draw_points = []
         self.btn_measure.setChecked(False)
         self.status_label.setText("Slot Mode: Drag to define the slotting target area.")
+        self.populate_inspector()
 
     def cancel_draw_mode(self):
         self.draw_mode = None;
@@ -1333,6 +1344,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 pass
             self.temp_draw_preview = None
         self.status_label.setText("Ready")
+        self.populate_inspector()
 
     def update_canvas_selection(self):
         selected_indices = [self.list_widget.row(item) for item in self.list_widget.selectedItems()]
@@ -1665,7 +1677,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
 
         tr = QtGui.QTransform()
         tr.translate(x, y)
-        tr.rotate(-rot)  # pyqt的旋转方向和KLayout相反，补个负号
+        tr.rotate(-rot)
         if mirror_x: tr.scale(-1, 1)
         tr.scale(scale, -scale)
         tr.translate(-br.left(), -br.bottom())
@@ -1992,17 +2004,14 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             else:
                 self.cancel_draw_mode()
 
-    # === 全面升级的右键点击检测 ===
     def handle_mouse_click(self, x, y, is_double=False, button=QtCore.Qt.LeftButton):
         if button == QtCore.Qt.RightButton:
-            # 1. 测查 GDS
             clicked_idx = next(
                 (i for i in range(len(self.gds_list) - 1, -1, -1) if self.is_hit(x, y, self.gds_list[i]['patch'])), -1)
             if clicked_idx != -1:
                 self.show_context_menu('gds', clicked_idx)
                 return
 
-            # 2. 测查自绘 Shape (Box, Polygon, ViaArray, Path)
             clicked_shape_idx = next((i for i in range(len(self.user_shapes) - 1, -1, -1) if
                                       'patch' in self.user_shapes[i] and self.is_hit(x, y,
                                                                                      self.user_shapes[i]['patch'])), -1)
@@ -2010,7 +2019,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 self.show_context_menu('shape', clicked_shape_idx)
                 return
 
-            # 3. 测查 Text 文字
             clicked_text_idx = next((i for i in range(len(self.user_texts) - 1, -1, -1) if
                                      'text_obj' in self.user_texts[i] and self.is_hit(x, y,
                                                                                       self.user_texts[i]['text_obj'])),
@@ -2529,7 +2537,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
 
         self.draw_overlaps()
 
-    # === 重构：通用的上下文右键菜单生成 ===
     def show_context_menu(self, item_type, idx):
         menu = QtWidgets.QMenu(self)
 
@@ -2563,11 +2570,9 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         elif action == a_fv:
             self.apply_transform(item_type, idx, 'fv')
 
-    # === 重构：通用的数学阵列变换引擎 ===
     def apply_transform(self, item_type, idx, trans_mode):
         self.save_snapshot()
         if item_type == 'gds':
-            # GDS 使用原生的 db.DTrans 处理
             if trans_mode == 'ccw':
                 self.gds_list[idx]['trans'] = db.DTrans(1, False, 0, 0) * self.gds_list[idx]['trans']
             elif trans_mode == 'cw':
@@ -2579,7 +2584,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             self.on_listbox_select()
 
         elif item_type == 'shape':
-            # 形状：对其所有关键点做绕中心的数学变换
             s = self.user_shapes[idx]
             pts = s['points']
             min_x, max_x = min(p[0] for p in pts), max(p[0] for p in pts)
@@ -2598,13 +2602,11 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                     new_pts.append((x, cy - (y - cy)))
             s['points'] = new_pts
 
-            # 如果是打孔阵列旋转，必须连带交换间距与孔宽高
             if trans_mode in ['ccw', 'cw'] and s['type'] == 'via_array':
                 s['via_w'], s['via_h'] = s.get('via_h', 1.0), s.get('via_w', 1.0)
                 s['pitch_x'], s['pitch_y'] = s.get('pitch_y', 2.0), s.get('pitch_x', 2.0)
 
         elif item_type == 'text':
-            # 文本：改变属性映射，使其由 QTransform 接管
             ut = self.user_texts[idx]
             if trans_mode == 'ccw':
                 ut['rot'] = (ut.get('rot', 0) + 90) % 360
@@ -2618,7 +2620,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
 
         self.draw_preview()
 
-    # === 重构：泛用的复制操作 ===
     def action_duplicate(self, item_type, idx):
         self.save_snapshot()
         offset = 200
@@ -2648,7 +2649,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
 
         self.draw_preview()
 
-    # === 重构：泛用的阵列生成操作 ===
     def action_create_array(self, item_type, idx):
         dlg = QtWidgets.QDialog(self)
         dlg.setWindowTitle("Create Array")
@@ -2812,7 +2812,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                         current_h_um = text_region.bbox().height() * dbu
                         scale_factor = ut['size'] / current_h_um if current_h_um > 0 else 1.0
 
-                        # 应用用户设置的旋转和翻转
                         rot_angle = ut.get('rot', 0)
                         mirror_x = ut.get('mirror_x', False)
                         merged_top.insert(db.DCellInstArray(text_cell.cell_index(),
