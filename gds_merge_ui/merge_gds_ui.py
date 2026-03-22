@@ -24,6 +24,8 @@ class GDSLoadWorker(QtCore.QThread):
             base_bbox = top_cell.dbbox()
 
             layers = [(layout.get_info(li).layer, layout.get_info(li).datatype) for li in layout.layer_indexes()]
+
+            # 1. 获取外轮廓 (用于外轮廓模式)
             region = db.Region()
             for li in layout.layer_indexes():
                 region.insert(top_cell.begin_shapes_rec(li))
@@ -34,11 +36,33 @@ class GDSLoadWorker(QtCore.QThread):
             true_polygons = [[(pt.x, pt.y) for pt in db.DPolygon(poly).transformed(trans).each_point_hull()]
                              for poly in region.each() if list(db.DPolygon(poly).transformed(trans).each_point_hull())]
 
+            # 2. 获取按层区分的完整几何多边形 (含孔洞，用于全图层模式)
+            full_polygons_by_layer = {}
+            for li in layout.layer_indexes():
+                layer_info = layout.get_info(li)
+                lyr_key = (layer_info.layer, layer_info.datatype)
+                shapes_region = db.Region(top_cell.begin_shapes_rec(li))
+                shapes_region.merge()  # 融合图层内的多边形以优化渲染性能
+
+                layer_polys = []
+                for poly in shapes_region.each():
+                    dpoly = db.DPolygon(poly).transformed(trans)
+                    # 提取外轮廓
+                    hull = [(pt.x, pt.y) for pt in dpoly.each_point_hull()]
+                    if not hull: continue
+                    # 提取内部的所有孔洞 (Holes)
+                    holes = [[(pt.x, pt.y) for pt in dpoly.each_point_hole(h)] for h in range(dpoly.holes())]
+                    layer_polys.append({'hull': hull, 'holes': holes})
+
+                if layer_polys:
+                    full_polygons_by_layer[lyr_key] = layer_polys
+
             result = {
                 'filepath': self.filepath,
                 'bbox_left': base_bbox.left, 'bbox_bottom': base_bbox.bottom,
                 'bbox_right': base_bbox.right, 'bbox_top': base_bbox.top,
                 'true_polygons': true_polygons,
+                'full_polygons': full_polygons_by_layer,
                 'layers': layers
             }
             self.result_ready.emit(result)
@@ -109,7 +133,7 @@ class GDSViewBox(pg.ViewBox):
 class GDSMergerProQt(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("GDS Assembler")
+        self.setWindowTitle("GDS Assembler Pro")
         self.resize(1400, 850)
         self.setAcceptDrops(True)
 
@@ -148,6 +172,13 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         self.setup_ui()
         self.draw_preview(reset_view=True)
         self.save_snapshot()
+
+    # --- 辅助颜色生成器 ---
+    def get_layer_color(self, layer, datatype):
+        colors = ['#FF3333', '#33FF33', '#3333FF', '#FFFF33', '#FF33FF', '#33FFFF', '#FFAA00', '#AA00FF', '#00AAFF',
+                  '#00FFAA']
+        idx = (layer * 3 + datatype * 7) % len(colors)
+        return colors[idx]
 
     def keyPressEvent(self, event):
         if event.key() in [QtCore.Qt.Key_Control, QtCore.Qt.Key_Meta]:
@@ -333,20 +364,24 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         btn_fit = QtWidgets.QPushButton("🔍 Fit");
         btn_fit.clicked.connect(lambda: self.canvas.autoRange())
         tb1.addWidget(btn_fit)
+
         self.btn_measure = QtWidgets.QPushButton("📏 Measure");
         self.btn_measure.setCheckable(True)
         self.btn_measure.toggled.connect(self.on_measure_toggle);
         tb1.addWidget(self.btn_measure)
+
         self.btn_overlap = QtWidgets.QPushButton("🔴 Overlap (ON)");
         self.btn_overlap.setCheckable(True)
         self.btn_overlap.setChecked(True);
         self.btn_overlap.toggled.connect(self.on_overlap_toggle)
         tb1.addWidget(self.btn_overlap)
-        self.btn_bbox = QtWidgets.QPushButton("✅ BBox Only");
-        self.btn_bbox.setCheckable(True)
-        self.btn_bbox.setChecked(True);
-        self.btn_bbox.toggled.connect(self.on_bbox_toggle)
-        tb1.addWidget(self.btn_bbox)
+
+        # ======== 三种显示模式的下拉切换 ========
+        self.cb_display = QtWidgets.QComboBox()
+        self.cb_display.addItems(["⬛ 黑盒模式 (BBox)", "🔲 外轮廓模式 (Outline)", "🎨 全图层模式 (Full Layers)"])
+        self.cb_display.currentIndexChanged.connect(self.on_display_mode_change)
+        tb1.addWidget(self.cb_display)
+
         self.chk_snap = QtWidgets.QCheckBox("🌐 Snap");
         self.inp_snap = QtWidgets.QLineEdit("10.0");
         self.inp_snap.setFixedWidth(50)
@@ -415,12 +450,15 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         right_layout = QtWidgets.QVBoxLayout(right_panel)
         right_layout.setContentsMargins(5, 5, 5, 5)
 
-        grp_layers = QtWidgets.QGroupBox("Layers")
+        grp_layers = QtWidgets.QGroupBox("Layers (Check to display)")
         l_layout = QtWidgets.QVBoxLayout(grp_layers)
         btn_refresh = QtWidgets.QPushButton("🔄 Refresh")
         btn_refresh.clicked.connect(self.refresh_layer_list)
         l_layout.addWidget(btn_refresh)
+
+        # === 图层复选列表 ===
         self.layer_list = QtWidgets.QListWidget()
+        self.layer_list.itemChanged.connect(self.on_layer_visibility_changed)
         l_layout.addWidget(self.layer_list)
         right_layout.addWidget(grp_layers, 1)
 
@@ -491,7 +529,15 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         self.apply_light_theme()
         self.populate_inspector()
 
-    # ================= 动态开槽算法 (终极版：解决层级残留问题) =================
+    def on_display_mode_change(self):
+        self.draw_preview(reset_view=False)
+
+    def on_layer_visibility_changed(self, item):
+        # 只有在全图层模式下，图层勾选状态改变才需要重新绘制画布
+        if self.cb_display.currentIndex() == 2:
+            self.draw_preview(reset_view=False)
+
+    # ================= 动态开槽算法 =================
     def action_execute_slotting(self):
         if not self.slot_box:
             QtWidgets.QMessageBox.warning(self, "Warning", "请先使用 '🕳️ Slot' 工具框选开槽区域！")
@@ -526,7 +572,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
 
             modified_any = False
 
-            # 1. 遍历现有的 GDS 并进行原位开槽打孔
             for i, gds in enumerate(self.gds_list):
                 layout = db.Layout()
                 layout.read(gds['path'])
@@ -535,7 +580,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
 
                 top_cell = layout.top_cells()[0]
 
-                # 将全局Slot框映射进GDS自身的局部坐标系
                 dx_dbu = round((gds['trans'].disp.x + gds['offset_x']) / dbu)
                 dy_dbu = round((gds['trans'].disp.y + gds['offset_y']) / dbu)
                 gds_trans = db.Trans(gds['trans'].rot, gds['trans'].is_mirror(), dx_dbu, dy_dbu)
@@ -544,7 +588,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 slot_region_local = slot_region_global.dup()
                 slot_region_local.transform(inv_trans)
 
-                # 注意：这里会把所有子 Cell 里的金属层全部压平拉出来
                 metal_region = db.Region(top_cell.begin_shapes_rec(li))
                 metal_region.merge()
 
@@ -571,31 +614,44 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 valid_slots = slots_region & safe_region
                 if valid_slots.is_empty(): continue
 
-                # 原位打孔的核心：用提取出来的完整金属图层减去合法的槽洞
                 final_metal = metal_region - valid_slots
 
-                # ！！！核心修复：必须清除所有层级(Cell)中的该图层，否则子模块的旧实心金属会残留！！！
                 for cell in layout.each_cell():
                     cell.shapes(li).clear()
 
-                # 将开孔后、扁平化的多边形重新插入到 Top Cell
                 top_cell.shapes(li).insert(final_metal)
 
                 temp_path = os.path.join(tempfile.gettempdir(),
                                          f"SLOTTED_{uuid.uuid4().hex[:8]}_{os.path.basename(gds['path'])}")
                 layout.write(temp_path)
 
-                # 无缝替换旧 GDS 路径
                 gds['path'] = temp_path
 
-                # 重新计算渲染边界
+                # === 同步重新计算全图层和轮廓数据 ===
+                trans_complex = db.DCplxTrans(layout.dbu)
                 all_layers_region = db.Region()
+                full_polygons_by_layer = {}
+
                 for layer_index in layout.layer_indexes():
-                    all_layers_region.insert(top_cell.begin_shapes_rec(layer_index))
+                    shapes_reg = db.Region(top_cell.begin_shapes_rec(layer_index))
+                    all_layers_region.insert(shapes_reg)
+
+                    shapes_reg.merge()
+                    layer_polys = []
+                    for poly in shapes_reg.each():
+                        dpoly = db.DPolygon(poly).transformed(trans_complex)
+                        hull = [(pt.x, pt.y) for pt in dpoly.each_point_hull()]
+                        if not hull: continue
+                        holes = [[(pt.x, pt.y) for pt in dpoly.each_point_hole(h)] for h in range(dpoly.holes())]
+                        layer_polys.append({'hull': hull, 'holes': holes})
+
+                    if layer_polys:
+                        layer_info = layout.get_info(layer_index)
+                        full_polygons_by_layer[(layer_info.layer, layer_info.datatype)] = layer_polys
+
                 all_layers_region.merge()
                 all_layers_region = all_layers_region.hulls()
 
-                trans_complex = db.DCplxTrans(layout.dbu)
                 true_polygons = [[(pt.x, pt.y) for pt in db.DPolygon(poly).transformed(trans_complex).each_point_hull()]
                                  for poly in all_layers_region.each() if
                                  list(db.DPolygon(poly).transformed(trans_complex).each_point_hull())]
@@ -608,9 +664,21 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                         path.addPolygon(qpoly)
                 gds['qpath'] = path
 
+                qpaths_full = {}
+                for lyr_key, polys in full_polygons_by_layer.items():
+                    l_path = QtGui.QPainterPath()
+                    l_path.setFillRule(QtCore.Qt.OddEvenFill)
+                    for poly_data in polys:
+                        hull_poly = QtGui.QPolygonF([QtCore.QPointF(pt[0], pt[1]) for pt in poly_data['hull']])
+                        l_path.addPolygon(hull_poly)
+                        for hole in poly_data['holes']:
+                            hole_poly = QtGui.QPolygonF([QtCore.QPointF(pt[0], pt[1]) for pt in hole])
+                            l_path.addPolygon(hole_poly)
+                    qpaths_full[lyr_key] = l_path
+                gds['qpaths_full'] = qpaths_full
+
                 modified_any = True
 
-            # 2. 对自绘 Shape 进行处理 (若图层符合要求)
             shapes_to_remove = []
             shapes_to_add_as_gds = []
 
@@ -937,7 +1005,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 'path': gds['path'], 'name': gds['name'], 'base_bbox': gds['base_bbox'],
                 'trans': gds['trans'] * db.DTrans(), 'offset_x': gds['offset_x'], 'offset_y': gds['offset_y'],
                 'color': gds['color'], 'true_polygons': gds['true_polygons'], 'layers': gds.get('layers', []),
-                'qpath': gds.get('qpath')
+                'qpath': gds.get('qpath'), 'qpaths_full': gds.get('qpaths_full')
             }
             snapshot['gds_list'].append(snap_gds)
         return snapshot
@@ -957,9 +1025,9 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             gds_info = {
                 'path': item['path'], 'name': item['name'], 'base_bbox': item['base_bbox'],
                 'trans': item['trans'], 'offset_x': item['offset_x'], 'offset_y': item['offset_y'],
-                'color': item['color'], 'patch': None, 'shadow_patch': None, 'collection': None,
+                'color': item['color'], 'patch': None, 'shadow_patch': None, 'collection': [],
                 'center_text': None, 'true_polygons': item['true_polygons'], 'layers': item.get('layers', []),
-                'qpath': item.get('qpath')
+                'qpath': item.get('qpath'), 'qpaths_full': item.get('qpaths_full')
             }
             self.gds_list.append(gds_info)
             self.list_widget.addItem(f"[{i + 1}] {item['name']}")
@@ -984,10 +1052,26 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
 
     # ================= 业务方法 =================
     def refresh_layer_list(self):
+        # 记录现有的选中状态，防止刷新后丢失用户的选择
+        state_map = {}
+        for i in range(self.layer_list.count()):
+            item = self.layer_list.item(i)
+            state_map[item.text()] = item.checkState()
+
+        self.layer_list.blockSignals(True)
         self.layer_list.clear()
         global_layers = set()
         for gds in self.gds_list: global_layers.update(gds.get('layers', []))
-        for l, d in sorted(list(global_layers)): self.layer_list.addItem(f"{l}/{d}")
+
+        for l, d in sorted(list(global_layers)):
+            item_text = f"{l}/{d}"
+            item = QtWidgets.QListWidgetItem(item_text)
+            item.setFlags(item.flags() | QtCore.Qt.ItemIsUserCheckable)
+            # 如果是新图层，默认勾选；如果是之前存在的，保持原来的状态
+            item.setCheckState(state_map.get(item_text, QtCore.Qt.Checked))
+            self.layer_list.addItem(item)
+
+        self.layer_list.blockSignals(False)
 
     def process_single_gds(self, filepath):
         self.status_label.setText(f"⏳ 正在后台极速解析: {os.path.basename(filepath)} ...")
@@ -1007,13 +1091,28 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         base_name = os.path.splitext(os.path.basename(filepath))[0]
         base_bbox = db.DBox(result['bbox_left'], result['bbox_bottom'], result['bbox_right'], result['bbox_top'])
         true_polygons = result['true_polygons']
+        full_polygons_by_layer = result['full_polygons']
         layers = result['layers']
 
-        path = QtGui.QPainterPath()
+        # 1. 组装外轮廓 Path
+        path_outline = QtGui.QPainterPath()
         if true_polygons:
             for poly in true_polygons:
                 qpoly = QtGui.QPolygonF([QtCore.QPointF(pt[0], pt[1]) for pt in poly])
-                path.addPolygon(qpoly)
+                path_outline.addPolygon(qpoly)
+
+        # 2. 组装全图层 Paths (支持镂空孔洞)
+        qpaths_full = {}
+        for lyr_key, polys in full_polygons_by_layer.items():
+            l_path = QtGui.QPainterPath()
+            l_path.setFillRule(QtCore.Qt.OddEvenFill)  # 设置奇偶填充镂空内部孔洞
+            for poly_data in polys:
+                hull_poly = QtGui.QPolygonF([QtCore.QPointF(pt[0], pt[1]) for pt in poly_data['hull']])
+                l_path.addPolygon(hull_poly)
+                for hole in poly_data['holes']:
+                    hole_poly = QtGui.QPolygonF([QtCore.QPointF(pt[0], pt[1]) for pt in hole])
+                    l_path.addPolygon(hole_poly)
+            qpaths_full[lyr_key] = l_path
 
         cx_block, cy_block = self.block_w / 2.0, self.block_h / 2.0
         cx_gds, cy_gds = (base_bbox.left + base_bbox.right) / 2.0, (base_bbox.bottom + base_bbox.top) / 2.0
@@ -1021,12 +1120,13 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         gds_info = {'path': filepath, 'name': base_name, 'base_bbox': base_bbox, 'trans': db.DTrans(),
                     'offset_x': cx_block - cx_gds, 'offset_y': cy_block - cy_gds,
                     'color': self.color_palette[len(self.gds_list) % len(self.color_palette)],
-                    'patch': None, 'shadow_patch': None, 'collection': None, 'center_text': None,
-                    'true_polygons': true_polygons, 'layers': layers, 'qpath': path}
+                    'patch': None, 'shadow_patch': None, 'collection': [], 'center_text': None,
+                    'true_polygons': true_polygons, 'layers': layers,
+                    'qpath': path_outline, 'qpaths_full': qpaths_full}
 
         self.gds_list.append(gds_info)
         self.list_widget.addItem(f"[{len(self.gds_list)}] {base_name}")
-        self.refresh_layer_list()
+        self.refresh_layer_list()  # 更新图层列表
         self.status_label.setText("Ready (后台解析完成)")
         self.draw_preview(reset_view=True)
 
@@ -1039,10 +1139,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
     def add_gds(self):
         paths, _ = QtWidgets.QFileDialog.getOpenFileNames(self, "Open GDS", "", "GDS Files (*.gds)")
         for p in paths: self.process_single_gds(p)
-
-    def on_bbox_toggle(self):
-        self.btn_bbox.setText("✅ BBox Only" if self.btn_bbox.isChecked() else "🔲 Full Detail")
-        self.draw_preview(reset_view=False)
 
     def on_overlap_toggle(self):
         self.btn_overlap.setText("🔴 Overlaps (ON)" if self.btn_overlap.isChecked() else "⭕ Overlaps (OFF)")
@@ -1245,24 +1341,50 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
 
     def update_canvas_selection(self):
         selected_indices = [self.list_widget.row(item) for item in self.list_widget.selectedItems()]
+        display_mode = self.cb_display.currentIndex()
+
         for i, gds in enumerate(self.gds_list):
             if gds.get('patch'):
                 if i in selected_indices:
-                    if 'shadow_patch' in gds and gds['shadow_patch']: gds['shadow_patch'].setOpacity(0.6)
+                    # 选中状态
+                    if 'shadow_patch' in gds and gds['shadow_patch']:
+                        # 只在黑盒模式才给立体阴影效果
+                        gds['shadow_patch'].setOpacity(0.6 if display_mode == 0 else 0.0)
+
                     shadow = QtWidgets.QGraphicsDropShadowEffect()
                     shadow.setBlurRadius(15);
                     shadow.setColor(QtGui.QColor('#00FFFF'));
                     shadow.setOffset(0, 0)
-                    gds['patch'].setGraphicsEffect(shadow)
-                    gds['patch'].setBrush(pg.mkBrush(QtGui.QColor(gds['color']).lighter(130).name() + '80'))
-                    gds['patch'].setPen(pg.mkPen('#00FFFF', width=3))
-                    if gds.get('collection'): gds['collection'].setPen(pg.mkPen('#00FFFF', width=2))
+                    gds['patch'].setGraphicsEffect(shadow if display_mode == 0 else None)
+
+                    if display_mode == 0:
+                        gds['patch'].setBrush(pg.mkBrush(QtGui.QColor(gds['color']).lighter(130).name() + '80'))
+                        gds['patch'].setPen(pg.mkPen('#00FFFF', width=3))
+                    else:
+                        gds['patch'].setBrush(pg.mkBrush(None))
+                        # 【细节优化】：在外轮廓/全图层选中时，给外围保留一个青色的虚线框作为辅助定位
+                        gds['patch'].setPen(pg.mkPen('#00FFFF', width=2, style=QtCore.Qt.DashLine))
+
+                    if gds.get('collection'):
+                        for item in gds['collection']:
+                            item.setPen(pg.mkPen('#00FFFF', width=2))
                 else:
+                    # 未选中状态
                     if 'shadow_patch' in gds and gds['shadow_patch']: gds['shadow_patch'].setOpacity(0.0)
                     gds['patch'].setGraphicsEffect(None)
-                    gds['patch'].setBrush(pg.mkBrush(gds['color'] + '60'))
-                    gds['patch'].setPen(pg.mkPen(gds['color'], width=1))
-                    if gds.get('collection'): gds['collection'].setPen(pg.mkPen(gds['color'] + 'E0', width=1))
+
+                    if display_mode == 0:
+                        gds['patch'].setBrush(pg.mkBrush(gds['color'] + '60'))
+                        gds['patch'].setPen(pg.mkPen(gds['color'], width=1))
+                    else:
+                        # 非黑盒模式下保持方盒完全透明
+                        gds['patch'].setBrush(pg.mkBrush(None))
+                        gds['patch'].setPen(pg.mkPen(None))
+
+                    if gds.get('collection'):
+                        for item in gds['collection']:
+                            if hasattr(item, 'orig_pen'):
+                                item.setPen(item.orig_pen)
 
         for i, ut in enumerate(self.user_texts):
             if 'text_obj' in ut and ut['text_obj']:
@@ -1360,7 +1482,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         elif mode == 'center_x':
             target = (min(b[0] for b in bboxes) + max(b[1] for b in bboxes)) / 2
             for i in selection: self.set_anchor_coords(self.gds_list[i], 'Center', target, (
-                        self.get_bbox(self.gds_list[i])[2] + self.get_bbox(self.gds_list[i])[3]) / 2)
+                    self.get_bbox(self.gds_list[i])[2] + self.get_bbox(self.gds_list[i])[3]) / 2)
         elif mode == 'bottom':
             target = min(b[2] for b in bboxes)
             for i in selection: self.set_anchor_coords(self.gds_list[i], 'Bottom-Left',
@@ -1372,7 +1494,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         elif mode == 'center_y':
             target = (min(b[2] for b in bboxes) + max(b[3] for b in bboxes)) / 2
             for i in selection: self.set_anchor_coords(self.gds_list[i], 'Center', (
-                        self.get_bbox(self.gds_list[i])[0] + self.get_bbox(self.gds_list[i])[1]) / 2, target)
+                    self.get_bbox(self.gds_list[i])[0] + self.get_bbox(self.gds_list[i])[1]) / 2, target)
         self.draw_preview(reset_view=False)
         self.on_listbox_select()
 
@@ -1464,7 +1586,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             gds['offset_x'], gds['offset_y'] = target_x - t_box.right, target_y - t_box.top
         elif anchor_type == "Center":
             gds['offset_x'], gds['offset_y'] = target_x - (t_box.left + t_box.right) / 2, target_y - (
-                        t_box.bottom + t_box.top) / 2
+                    t_box.bottom + t_box.top) / 2
 
     def on_listbox_select(self):
         selection = [self.list_widget.row(item) for item in self.list_widget.selectedItems()]
@@ -1557,7 +1679,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         tr.translate(-br.left(), -br.bottom())
         return tr.map(path)
 
-    # ================== 核心：根据不同主题适配颜色的渲染 ==================
+    # ================== 核心：根据不同主题及显示模式适配颜色的渲染 ==================
     def draw_preview(self, reset_view=False):
         self.canvas.clear()
         self.clear_active_measurement()
@@ -1569,6 +1691,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             origin_brush = 'w'
             no_gds_color = '#bbbbbb';
             shadow_color = (0, 0, 0, 150)
+            text_fill_color = '#FFFFFF'
         else:
             bg_pen_color = '#888888';
             bg_brush_color = (240, 240, 240, 200)
@@ -1576,6 +1699,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             origin_brush = '#888888'
             no_gds_color = '#888888';
             shadow_color = (100, 100, 100, 100)
+            text_fill_color = '#111111'
 
         bg_rect = QtWidgets.QGraphicsRectItem(0, 0, self.block_w, self.block_h)
         bg_rect.setPen(pg.mkPen(bg_pen_color, width=2, style=QtCore.Qt.DashLine))
@@ -1592,6 +1716,19 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             self.canvas.addItem(text)
 
         shadow_offset = min(self.block_w, self.block_h) * 0.01
+        display_mode = self.cb_display.currentIndex()
+
+        # === 获取当前复选框选中的可见图层 ===
+        visible_layers = set()
+        if display_mode == 2:
+            for i in range(self.layer_list.count()):
+                item = self.layer_list.item(i)
+                if item.checkState() == QtCore.Qt.Checked:
+                    try:
+                        l_str, d_str = item.text().split('/')
+                        visible_layers.add((int(l_str), int(d_str)))
+                    except:
+                        pass
 
         for gds in self.gds_list:
             t_box = gds['trans'] * gds['base_bbox']
@@ -1607,33 +1744,76 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             gds['shadow_patch'] = shadow_rect
 
             rect = QtWidgets.QGraphicsRectItem(sx, sy, w, h)
-            rect.setBrush(pg.mkBrush(gds['color'] + '40'))
-            rect.setPen(pg.mkPen(gds['color'], width=1))
+            if display_mode == 0:
+                rect.setBrush(pg.mkBrush(gds['color'] + '40'))
+                rect.setPen(pg.mkPen(gds['color'], width=1))
+            else:
+                rect.setBrush(pg.mkBrush(None))
+                rect.setPen(pg.mkPen(None))
+
             rect.setZValue(10)
             self.canvas.addItem(rect)
             gds['patch'] = rect
 
-            gds['collection'] = None
-            if not self.btn_bbox.isChecked() and gds.get('qpath'):
-                path_item = QtWidgets.QGraphicsPathItem(gds['qpath'])
-                path_item.setBrush(pg.mkBrush(0, 0, 0, 150))
-                path_item.setPen(pg.mkPen(gds['color'], width=1))
+            gds['collection'] = []
 
-                tr = QtGui.QTransform()
-                tr.translate(gds['offset_x'], gds['offset_y'])
-                tr.translate(gds['trans'].disp.x, gds['trans'].disp.y)
-                tr.rotate(gds['trans'].rot * 90.0)
-                if gds['trans'].is_mirror(): tr.scale(1.0, -1.0)
+            tr = QtGui.QTransform()
+            tr.translate(gds['offset_x'], gds['offset_y'])
+            tr.translate(gds['trans'].disp.x, gds['trans'].disp.y)
+            tr.rotate(gds['trans'].rot * 90.0)
+            if gds['trans'].is_mirror(): tr.scale(1.0, -1.0)
+
+            if display_mode == 1 and gds.get('qpath'):
+                path_item = QtWidgets.QGraphicsPathItem(gds['qpath'])
+                path_item.setBrush(pg.mkBrush(0, 0, 0, 150) if self.is_dark_mode else pg.mkBrush(200, 200, 200, 150))
+                orig_pen = pg.mkPen(gds['color'], width=1)
+                path_item.setPen(orig_pen)
+                path_item.orig_pen = orig_pen
                 path_item.setTransform(tr)
                 path_item.setZValue(15)
                 self.canvas.addItem(path_item)
-                gds['collection'] = path_item
+                gds['collection'].append(path_item)
 
-            text = pg.TextItem(gds['name'], color='w', anchor=(0.5, 0.5), fill=pg.mkBrush(0, 0, 0, 180))
-            text.setPos(sx + w / 2, sy + h / 2)
-            text.setZValue(90)
-            self.canvas.addItem(text)
-            gds['center_text'] = text
+            elif display_mode == 2 and gds.get('qpaths_full'):
+                for lyr_key, l_path in gds['qpaths_full'].items():
+                    # 判断当前图层是否被用户勾选可见
+                    if lyr_key not in visible_layers:
+                        continue
+
+                    layer_color = self.get_layer_color(lyr_key[0], lyr_key[1])
+                    path_item = QtWidgets.QGraphicsPathItem(l_path)
+                    path_item.setBrush(pg.mkBrush(layer_color + '90'))
+                    orig_pen = pg.mkPen(layer_color, width=1)
+                    path_item.setPen(orig_pen)
+                    path_item.orig_pen = orig_pen
+                    path_item.setTransform(tr)
+                    path_item.setZValue(15)
+                    self.canvas.addItem(path_item)
+                    gds['collection'].append(path_item)
+
+            # ====== 自适应大小的 GDS 名字 ======
+            text_path = QtGui.QPainterPath()
+            font = QtGui.QFont("Arial")
+            font.setPixelSize(100)
+            text_path.addText(0, 0, font, gds['name'])
+            br = text_path.boundingRect()
+
+            scale_w = (w * 0.8) / br.width() if br.width() > 0 else 1.0
+            scale_h = (h * 0.2) / br.height() if br.height() > 0 else 1.0
+            scale = min(scale_w, scale_h)
+
+            t_text = QtGui.QTransform()
+            t_text.scale(scale, -scale)
+            t_text.translate(-br.center().x(), -br.center().y())
+            base_text_path = t_text.map(text_path)
+
+            text_item = QtWidgets.QGraphicsPathItem(base_text_path)
+            text_item.setBrush(pg.mkBrush(text_fill_color))
+            text_item.setPen(pg.mkPen(None))
+            text_item.setPos(sx + w / 2, sy + h / 2)
+            text_item.setZValue(90)
+            self.canvas.addItem(text_item)
+            gds['center_text'] = text_item
 
         for m in self.measurements:
             line = QtWidgets.QGraphicsLineItem(m['x0'], m['y0'], m['x1'], m['y1'])
@@ -1848,7 +2028,8 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             if not self.draw_points:
                 self.draw_points.append((snap_x, snap_y))
             else:
-                self.draw_points.append((snap_x, snap_y)); self.finalize_shape()
+                self.draw_points.append((snap_x, snap_y));
+                self.finalize_shape()
             return
         elif self.draw_mode in ['polygon', 'path']:
             self.draw_points.append((snap_x, snap_y))
@@ -2021,6 +2202,8 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             self.guide_lines.clear()
             self.update_canvas_selection()
             self.canvas.setCursor(QtCore.Qt.ArrowCursor)
+
+            self.draw_overlaps()  # 拖拽结束后刷新重叠判定框
 
     def handle_mouse_move(self, x, y):
         snap_x, snap_y, sn_x, sn_y = self.get_snapped_coordinate(x, y)
@@ -2260,7 +2443,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                         temp_ox, temp_oy = snap_x - t_box.right, snap_y - t_box.top
                     elif anchor == "Center":
                         temp_ox, temp_oy = snap_x - (t_box.left + t_box.right) / 2, snap_y - (
-                                    t_box.bottom + t_box.top) / 2
+                                t_box.bottom + t_box.top) / 2
                     is_grid_snapped = True
             except ValueError:
                 pass
@@ -2268,7 +2451,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         if not is_grid_snapped:
             drag_x_pois, drag_y_pois = self.get_pois(handle_gds, temp_ox, temp_oy)
             min_dx, min_dy = (self.canvas.viewRange()[0][1] - self.canvas.viewRange()[0][0]) * 0.02, (
-                        self.canvas.viewRange()[1][1] - self.canvas.viewRange()[1][0]) * 0.02
+                    self.canvas.viewRange()[1][1] - self.canvas.viewRange()[1][0]) * 0.02
             snap_shift_x, snap_shift_y = 0, 0
             for i, other_gds in enumerate(self.gds_list):
                 if i in self.drag_start_offsets: continue
@@ -2308,7 +2491,8 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 tr.translate(gds['trans'].disp.x, gds['trans'].disp.y)
                 tr.rotate(gds['trans'].rot * 90.0)
                 if gds['trans'].is_mirror(): tr.scale(1.0, -1.0)
-                gds['collection'].setTransform(tr)
+                for item in gds['collection']:
+                    item.setTransform(tr)
 
         if not is_grid_snapped:
             guide_pen = pg.mkPen('#FF8800', width=1.5, style=QtCore.Qt.DashLine)
@@ -2329,6 +2513,9 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             if self.active_shape_type == 'gds':
                 self.prop_x_inp.setText(f"{cx:.3f}");
                 self.prop_y_inp.setText(f"{cy:.3f}")
+
+        # 拖拽移动过程中实时刷新重叠区域判定
+        self.draw_overlaps()
 
     def show_context_menu(self, idx):
         menu = QtWidgets.QMenu(self)
@@ -2360,8 +2547,8 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         self.gds_list.append(
             {'path': o['path'], 'name': o['name'], 'base_bbox': o['base_bbox'], 'trans': o['trans'] * db.DTrans(),
              'offset_x': o['offset_x'] + 200, 'offset_y': o['offset_y'] - 200, 'color': o['color'], 'patch': None,
-             'shadow_patch': None, 'collection': None, 'center_text': None, 'true_polygons': o['true_polygons'],
-             'layers': o.get('layers', []), 'qpath': o.get('qpath')})
+             'shadow_patch': None, 'collection': [], 'center_text': None, 'true_polygons': o['true_polygons'],
+             'layers': o.get('layers', []), 'qpath': o.get('qpath'), 'qpaths_full': o.get('qpaths_full')})
         self.list_widget.addItem(f"[{len(self.gds_list)}] {o['name']}")
         self.draw_preview()
 
@@ -2395,9 +2582,9 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                             {'path': o['path'], 'name': f"{o['name']}_R{i}C{j}", 'base_bbox': o['base_bbox'],
                              'trans': o['trans'] * db.DTrans(), 'offset_x': o['offset_x'] + j * sx,
                              'offset_y': o['offset_y'] + i * sy, 'color': o['color'], 'patch': None,
-                             'shadow_patch': None, 'collection': None,
+                             'shadow_patch': None, 'collection': [],
                              'center_text': None, 'true_polygons': o['true_polygons'], 'layers': o.get('layers', []),
-                             'qpath': o.get('qpath')})
+                             'qpath': o.get('qpath'), 'qpaths_full': o.get('qpaths_full')})
                         self.list_widget.addItem(f"[{len(self.gds_list)}] {self.gds_list[-1]['name']}")
                 self.draw_preview()
             except ValueError:
