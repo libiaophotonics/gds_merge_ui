@@ -456,7 +456,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         btn_refresh.clicked.connect(self.refresh_layer_list)
         l_layout.addWidget(btn_refresh)
 
-        # === 图层复选列表 ===
         self.layer_list = QtWidgets.QListWidget()
         self.layer_list.itemChanged.connect(self.on_layer_visibility_changed)
         l_layout.addWidget(self.layer_list)
@@ -533,7 +532,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         self.draw_preview(reset_view=False)
 
     def on_layer_visibility_changed(self, item):
-        # 只有在全图层模式下，图层勾选状态改变才需要重新绘制画布
         if self.cb_display.currentIndex() == 2:
             self.draw_preview(reset_view=False)
 
@@ -1052,7 +1050,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
 
     # ================= 业务方法 =================
     def refresh_layer_list(self):
-        # 记录现有的选中状态，防止刷新后丢失用户的选择
         state_map = {}
         for i in range(self.layer_list.count()):
             item = self.layer_list.item(i)
@@ -1067,7 +1064,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             item_text = f"{l}/{d}"
             item = QtWidgets.QListWidgetItem(item_text)
             item.setFlags(item.flags() | QtCore.Qt.ItemIsUserCheckable)
-            # 如果是新图层，默认勾选；如果是之前存在的，保持原来的状态
             item.setCheckState(state_map.get(item_text, QtCore.Qt.Checked))
             self.layer_list.addItem(item)
 
@@ -1094,18 +1090,16 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         full_polygons_by_layer = result['full_polygons']
         layers = result['layers']
 
-        # 1. 组装外轮廓 Path
         path_outline = QtGui.QPainterPath()
         if true_polygons:
             for poly in true_polygons:
                 qpoly = QtGui.QPolygonF([QtCore.QPointF(pt[0], pt[1]) for pt in poly])
                 path_outline.addPolygon(qpoly)
 
-        # 2. 组装全图层 Paths (支持镂空孔洞)
         qpaths_full = {}
         for lyr_key, polys in full_polygons_by_layer.items():
             l_path = QtGui.QPainterPath()
-            l_path.setFillRule(QtCore.Qt.OddEvenFill)  # 设置奇偶填充镂空内部孔洞
+            l_path.setFillRule(QtCore.Qt.OddEvenFill)
             for poly_data in polys:
                 hull_poly = QtGui.QPolygonF([QtCore.QPointF(pt[0], pt[1]) for pt in poly_data['hull']])
                 l_path.addPolygon(hull_poly)
@@ -1126,7 +1120,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
 
         self.gds_list.append(gds_info)
         self.list_widget.addItem(f"[{len(self.gds_list)}] {base_name}")
-        self.refresh_layer_list()  # 更新图层列表
+        self.refresh_layer_list()
         self.status_label.setText("Ready (后台解析完成)")
         self.draw_preview(reset_view=True)
 
@@ -1258,7 +1252,8 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         if dlg.exec_():
             try:
                 self.draw_current_props = {'text': t_var.text(), 'size': float(s_var.text()),
-                                           'layer': int(l_var.text()), 'dt': int(dt_var.text())}
+                                           'layer': int(l_var.text()), 'dt': int(dt_var.text()),
+                                           'rot': 0, 'mirror_x': False}  # Added default text transformations
                 self.draw_mode = 'text';
                 self.btn_measure.setChecked(False)
                 self.status_label.setText("Text Mode: Click on Canvas to place.")
@@ -1346,9 +1341,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         for i, gds in enumerate(self.gds_list):
             if gds.get('patch'):
                 if i in selected_indices:
-                    # 选中状态
                     if 'shadow_patch' in gds and gds['shadow_patch']:
-                        # 只在黑盒模式才给立体阴影效果
                         gds['shadow_patch'].setOpacity(0.6 if display_mode == 0 else 0.0)
 
                     shadow = QtWidgets.QGraphicsDropShadowEffect()
@@ -1362,14 +1355,12 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                         gds['patch'].setPen(pg.mkPen('#00FFFF', width=3))
                     else:
                         gds['patch'].setBrush(pg.mkBrush(None))
-                        # 【细节优化】：在外轮廓/全图层选中时，给外围保留一个青色的虚线框作为辅助定位
                         gds['patch'].setPen(pg.mkPen('#00FFFF', width=2, style=QtCore.Qt.DashLine))
 
                     if gds.get('collection'):
                         for item in gds['collection']:
                             item.setPen(pg.mkPen('#00FFFF', width=2))
                 else:
-                    # 未选中状态
                     if 'shadow_patch' in gds and gds['shadow_patch']: gds['shadow_patch'].setOpacity(0.0)
                     gds['patch'].setGraphicsEffect(None)
 
@@ -1377,7 +1368,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                         gds['patch'].setBrush(pg.mkBrush(gds['color'] + '60'))
                         gds['patch'].setPen(pg.mkPen(gds['color'], width=1))
                     else:
-                        # 非黑盒模式下保持方盒完全透明
                         gds['patch'].setBrush(pg.mkBrush(None))
                         gds['patch'].setPen(pg.mkPen(None))
 
@@ -1665,7 +1655,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             self.inp_y.setText("0.0")
             self.draw_preview(reset_view=False)
 
-    def create_text_path(self, text_str, size, x, y):
+    def create_text_path(self, text_str, size, x, y, rot=0, mirror_x=False):
         path = QtGui.QPainterPath()
         font = QtGui.QFont("Arial")
         font.setPixelSize(100)
@@ -1675,6 +1665,8 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
 
         tr = QtGui.QTransform()
         tr.translate(x, y)
+        tr.rotate(-rot)  # pyqt的旋转方向和KLayout相反，补个负号
+        if mirror_x: tr.scale(-1, 1)
         tr.scale(scale, -scale)
         tr.translate(-br.left(), -br.bottom())
         return tr.map(path)
@@ -1718,7 +1710,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         shadow_offset = min(self.block_w, self.block_h) * 0.01
         display_mode = self.cb_display.currentIndex()
 
-        # === 获取当前复选框选中的可见图层 ===
         visible_layers = set()
         if display_mode == 2:
             for i in range(self.layer_list.count()):
@@ -1776,7 +1767,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
 
             elif display_mode == 2 and gds.get('qpaths_full'):
                 for lyr_key, l_path in gds['qpaths_full'].items():
-                    # 判断当前图层是否被用户勾选可见
                     if lyr_key not in visible_layers:
                         continue
 
@@ -1791,7 +1781,6 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                     self.canvas.addItem(path_item)
                     gds['collection'].append(path_item)
 
-            # ====== 自适应大小的 GDS 名字 ======
             text_path = QtGui.QPainterPath()
             font = QtGui.QFont("Arial")
             font.setPixelSize(100)
@@ -1825,7 +1814,8 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             self.canvas.addItem(t)
 
         for ut in self.user_texts:
-            path = self.create_text_path(ut['text'], ut['size'], ut['x'], ut['y'])
+            path = self.create_text_path(ut['text'], ut['size'], ut['x'], ut['y'], ut.get('rot', 0),
+                                         ut.get('mirror_x', False))
             text_item = QtWidgets.QGraphicsPathItem(path)
             text_item.setBrush(pg.mkBrush('#007788'))
             text_item.setPen(pg.mkPen(None))
@@ -2002,11 +1992,32 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             else:
                 self.cancel_draw_mode()
 
+    # === 全面升级的右键点击检测 ===
     def handle_mouse_click(self, x, y, is_double=False, button=QtCore.Qt.LeftButton):
         if button == QtCore.Qt.RightButton:
+            # 1. 测查 GDS
             clicked_idx = next(
                 (i for i in range(len(self.gds_list) - 1, -1, -1) if self.is_hit(x, y, self.gds_list[i]['patch'])), -1)
-            if clicked_idx != -1: self.show_context_menu(clicked_idx)
+            if clicked_idx != -1:
+                self.show_context_menu('gds', clicked_idx)
+                return
+
+            # 2. 测查自绘 Shape (Box, Polygon, ViaArray, Path)
+            clicked_shape_idx = next((i for i in range(len(self.user_shapes) - 1, -1, -1) if
+                                      'patch' in self.user_shapes[i] and self.is_hit(x, y,
+                                                                                     self.user_shapes[i]['patch'])), -1)
+            if clicked_shape_idx != -1:
+                self.show_context_menu('shape', clicked_shape_idx)
+                return
+
+            # 3. 测查 Text 文字
+            clicked_text_idx = next((i for i in range(len(self.user_texts) - 1, -1, -1) if
+                                     'text_obj' in self.user_texts[i] and self.is_hit(x, y,
+                                                                                      self.user_texts[i]['text_obj'])),
+                                    -1)
+            if clicked_text_idx != -1:
+                self.show_context_menu('text', clicked_text_idx)
+                return
             return
 
         snap_x, snap_y, _, _ = self.get_snapped_coordinate(x, y)
@@ -2203,7 +2214,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             self.update_canvas_selection()
             self.canvas.setCursor(QtCore.Qt.ArrowCursor)
 
-            self.draw_overlaps()  # 拖拽结束后刷新重叠判定框
+            self.draw_overlaps()
 
     def handle_mouse_move(self, x, y):
         snap_x, snap_y, sn_x, sn_y = self.get_snapped_coordinate(x, y)
@@ -2225,7 +2236,9 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
         if self.draw_mode is not None:
             if self.draw_mode == 'text':
                 path = self.create_text_path(self.draw_current_props['text'], self.draw_current_props['size'], snap_x,
-                                             snap_y)
+                                             snap_y,
+                                             self.draw_current_props.get('rot', 0),
+                                             self.draw_current_props.get('mirror_x', False))
                 if not self.temp_draw_preview:
                     self.temp_draw_preview = QtWidgets.QGraphicsPathItem(path)
                     self.temp_draw_preview.setBrush(pg.mkBrush('#007788'))
@@ -2343,7 +2356,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             self.user_texts[self.dragging_idx]['x'], self.user_texts[self.dragging_idx]['y'] = nx, ny
 
             ut = self.user_texts[self.dragging_idx]
-            path = self.create_text_path(ut['text'], ut['size'], nx, ny)
+            path = self.create_text_path(ut['text'], ut['size'], nx, ny, ut.get('rot', 0), ut.get('mirror_x', False))
             ut['text_obj'].setPath(path)
 
             if self.active_shape_type == 'text':
@@ -2514,12 +2527,21 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                 self.prop_x_inp.setText(f"{cx:.3f}");
                 self.prop_y_inp.setText(f"{cy:.3f}")
 
-        # 拖拽移动过程中实时刷新重叠区域判定
         self.draw_overlaps()
 
-    def show_context_menu(self, idx):
+    # === 重构：通用的上下文右键菜单生成 ===
+    def show_context_menu(self, item_type, idx):
         menu = QtWidgets.QMenu(self)
-        a_dup = menu.addAction(f"Duplicate {self.gds_list[idx]['name']}")
+
+        name = ""
+        if item_type == 'gds':
+            name = self.gds_list[idx]['name']
+        elif item_type == 'shape':
+            name = f"{self.user_shapes[idx]['type'].capitalize()} Shape"
+        elif item_type == 'text':
+            name = f"Text '{self.user_texts[idx]['text']}'"
+
+        a_dup = menu.addAction(f"Duplicate {name}")
         a_arr = menu.addAction("Create Array (Step & Repeat)...")
         menu.addSeparator()
         a_ccw = menu.addAction("Rotate 90 CCW")
@@ -2529,30 +2551,105 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
 
         action = menu.exec_(QtGui.QCursor.pos())
         if action == a_dup:
-            self.action_duplicate(idx)
+            self.action_duplicate(item_type, idx)
         elif action == a_arr:
-            self.action_create_array(idx)
+            self.action_create_array(item_type, idx)
         elif action == a_ccw:
-            self.action_rotate_ccw(idx)
+            self.apply_transform(item_type, idx, 'ccw')
         elif action == a_cw:
-            self.action_rotate_cw(idx)
+            self.apply_transform(item_type, idx, 'cw')
         elif action == a_fh:
-            self.action_flip_horizontal(idx)
+            self.apply_transform(item_type, idx, 'fh')
         elif action == a_fv:
-            self.action_flip_vertical(idx)
+            self.apply_transform(item_type, idx, 'fv')
 
-    def action_duplicate(self, idx):
+    # === 重构：通用的数学阵列变换引擎 ===
+    def apply_transform(self, item_type, idx, trans_mode):
         self.save_snapshot()
-        o = self.gds_list[idx]
-        self.gds_list.append(
-            {'path': o['path'], 'name': o['name'], 'base_bbox': o['base_bbox'], 'trans': o['trans'] * db.DTrans(),
-             'offset_x': o['offset_x'] + 200, 'offset_y': o['offset_y'] - 200, 'color': o['color'], 'patch': None,
-             'shadow_patch': None, 'collection': [], 'center_text': None, 'true_polygons': o['true_polygons'],
-             'layers': o.get('layers', []), 'qpath': o.get('qpath'), 'qpaths_full': o.get('qpaths_full')})
-        self.list_widget.addItem(f"[{len(self.gds_list)}] {o['name']}")
+        if item_type == 'gds':
+            # GDS 使用原生的 db.DTrans 处理
+            if trans_mode == 'ccw':
+                self.gds_list[idx]['trans'] = db.DTrans(1, False, 0, 0) * self.gds_list[idx]['trans']
+            elif trans_mode == 'cw':
+                self.gds_list[idx]['trans'] = db.DTrans(3, False, 0, 0) * self.gds_list[idx]['trans']
+            elif trans_mode == 'fh':
+                self.gds_list[idx]['trans'] = db.DTrans(2, True, 0, 0) * self.gds_list[idx]['trans']
+            elif trans_mode == 'fv':
+                self.gds_list[idx]['trans'] = db.DTrans(0, True, 0, 0) * self.gds_list[idx]['trans']
+            self.on_listbox_select()
+
+        elif item_type == 'shape':
+            # 形状：对其所有关键点做绕中心的数学变换
+            s = self.user_shapes[idx]
+            pts = s['points']
+            min_x, max_x = min(p[0] for p in pts), max(p[0] for p in pts)
+            min_y, max_y = min(p[1] for p in pts), max(p[1] for p in pts)
+            cx, cy = (min_x + max_x) / 2.0, (min_y + max_y) / 2.0
+
+            new_pts = []
+            for x, y in pts:
+                if trans_mode == 'ccw':
+                    new_pts.append((cx - (y - cy), cy + (x - cx)))
+                elif trans_mode == 'cw':
+                    new_pts.append((cx + (y - cy), cy - (x - cx)))
+                elif trans_mode == 'fh':
+                    new_pts.append((cx - (x - cx), y))
+                elif trans_mode == 'fv':
+                    new_pts.append((x, cy - (y - cy)))
+            s['points'] = new_pts
+
+            # 如果是打孔阵列旋转，必须连带交换间距与孔宽高
+            if trans_mode in ['ccw', 'cw'] and s['type'] == 'via_array':
+                s['via_w'], s['via_h'] = s.get('via_h', 1.0), s.get('via_w', 1.0)
+                s['pitch_x'], s['pitch_y'] = s.get('pitch_y', 2.0), s.get('pitch_x', 2.0)
+
+        elif item_type == 'text':
+            # 文本：改变属性映射，使其由 QTransform 接管
+            ut = self.user_texts[idx]
+            if trans_mode == 'ccw':
+                ut['rot'] = (ut.get('rot', 0) + 90) % 360
+            elif trans_mode == 'cw':
+                ut['rot'] = (ut.get('rot', 0) - 90) % 360
+            elif trans_mode == 'fh':
+                ut['mirror_x'] = not ut.get('mirror_x', False)
+            elif trans_mode == 'fv':
+                ut['mirror_x'] = not ut.get('mirror_x', False)
+                ut['rot'] = (ut.get('rot', 0) + 180) % 360
+
         self.draw_preview()
 
-    def action_create_array(self, idx):
+    # === 重构：泛用的复制操作 ===
+    def action_duplicate(self, item_type, idx):
+        self.save_snapshot()
+        offset = 200
+
+        if item_type == 'gds':
+            o = self.gds_list[idx]
+            self.gds_list.append(
+                {'path': o['path'], 'name': o['name'], 'base_bbox': o['base_bbox'], 'trans': o['trans'] * db.DTrans(),
+                 'offset_x': o['offset_x'] + offset, 'offset_y': o['offset_y'] - offset, 'color': o['color'],
+                 'patch': None,
+                 'shadow_patch': None, 'collection': [], 'center_text': None, 'true_polygons': o['true_polygons'],
+                 'layers': o.get('layers', []), 'qpath': o.get('qpath'), 'qpaths_full': o.get('qpaths_full')})
+            self.list_widget.addItem(f"[{len(self.gds_list)}] {o['name']}")
+
+        elif item_type == 'shape':
+            o = self.user_shapes[idx].copy()
+            o['points'] = [(x + offset, y - offset) for x, y in o['points']]
+            if 'patch' in o: o['patch'] = None
+            self.user_shapes.append(o)
+
+        elif item_type == 'text':
+            o = self.user_texts[idx].copy()
+            o['x'] += offset
+            o['y'] -= offset
+            if 'text_obj' in o: o['text_obj'] = None
+            self.user_texts.append(o)
+
+        self.draw_preview()
+
+    # === 重构：泛用的阵列生成操作 ===
+    def action_create_array(self, item_type, idx):
         dlg = QtWidgets.QDialog(self)
         dlg.setWindowTitle("Create Array")
         layout = QtWidgets.QFormLayout(dlg)
@@ -2574,45 +2671,46 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                     spc_y_var.text())
                 if r < 1 or c < 1: return
                 self.save_snapshot()
-                o = self.gds_list[idx]
-                for i in range(r):
-                    for j in range(c):
-                        if i == 0 and j == 0: continue
-                        self.gds_list.append(
-                            {'path': o['path'], 'name': f"{o['name']}_R{i}C{j}", 'base_bbox': o['base_bbox'],
-                             'trans': o['trans'] * db.DTrans(), 'offset_x': o['offset_x'] + j * sx,
-                             'offset_y': o['offset_y'] + i * sy, 'color': o['color'], 'patch': None,
-                             'shadow_patch': None, 'collection': [],
-                             'center_text': None, 'true_polygons': o['true_polygons'], 'layers': o.get('layers', []),
-                             'qpath': o.get('qpath'), 'qpaths_full': o.get('qpaths_full')})
-                        self.list_widget.addItem(f"[{len(self.gds_list)}] {self.gds_list[-1]['name']}")
+
+                if item_type == 'gds':
+                    o = self.gds_list[idx]
+                    for i in range(r):
+                        for j in range(c):
+                            if i == 0 and j == 0: continue
+                            self.gds_list.append(
+                                {'path': o['path'], 'name': f"{o['name']}_R{i}C{j}", 'base_bbox': o['base_bbox'],
+                                 'trans': o['trans'] * db.DTrans(), 'offset_x': o['offset_x'] + j * sx,
+                                 'offset_y': o['offset_y'] + i * sy, 'color': o['color'], 'patch': None,
+                                 'shadow_patch': None, 'collection': [],
+                                 'center_text': None, 'true_polygons': o['true_polygons'],
+                                 'layers': o.get('layers', []),
+                                 'qpath': o.get('qpath'), 'qpaths_full': o.get('qpaths_full')})
+                            self.list_widget.addItem(f"[{len(self.gds_list)}] {self.gds_list[-1]['name']}")
+
+                elif item_type == 'shape':
+                    o = self.user_shapes[idx]
+                    for i in range(r):
+                        for j in range(c):
+                            if i == 0 and j == 0: continue
+                            new_o = o.copy()
+                            new_o['points'] = [(x + j * sx, y + i * sy) for x, y in o['points']]
+                            if 'patch' in new_o: new_o['patch'] = None
+                            self.user_shapes.append(new_o)
+
+                elif item_type == 'text':
+                    o = self.user_texts[idx]
+                    for i in range(r):
+                        for j in range(c):
+                            if i == 0 and j == 0: continue
+                            new_o = o.copy()
+                            new_o['x'] += j * sx
+                            new_o['y'] += i * sy
+                            if 'text_obj' in new_o: new_o['text_obj'] = None
+                            self.user_texts.append(new_o)
+
                 self.draw_preview()
             except ValueError:
                 pass
-
-    def action_rotate_ccw(self, i):
-        self.save_snapshot();
-        self.gds_list[i]['trans'] = db.DTrans(1, False, 0, 0) * self.gds_list[i]['trans'];
-        self.draw_preview();
-        self.on_listbox_select()
-
-    def action_rotate_cw(self, i):
-        self.save_snapshot();
-        self.gds_list[i]['trans'] = db.DTrans(3, False, 0, 0) * self.gds_list[i]['trans'];
-        self.draw_preview();
-        self.on_listbox_select()
-
-    def action_flip_horizontal(self, i):
-        self.save_snapshot();
-        self.gds_list[i]['trans'] = db.DTrans(2, True, 0, 0) * self.gds_list[i]['trans'];
-        self.draw_preview();
-        self.on_listbox_select()
-
-    def action_flip_vertical(self, i):
-        self.save_snapshot();
-        self.gds_list[i]['trans'] = db.DTrans(0, True, 0, 0) * self.gds_list[i]['trans'];
-        self.draw_preview();
-        self.on_listbox_select()
 
     # ================= KLayout 核心操作与布尔运算 =================
     def execute_stitch(self):
@@ -2713,8 +2811,13 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
                         text_cell.shapes(lbl_idx).insert(text_region)
                         current_h_um = text_region.bbox().height() * dbu
                         scale_factor = ut['size'] / current_h_um if current_h_um > 0 else 1.0
+
+                        # 应用用户设置的旋转和翻转
+                        rot_angle = ut.get('rot', 0)
+                        mirror_x = ut.get('mirror_x', False)
                         merged_top.insert(db.DCellInstArray(text_cell.cell_index(),
-                                                            db.DCplxTrans(scale_factor, 0, False, ut['x'], ut['y'])))
+                                                            db.DCplxTrans(scale_factor, rot_angle, mirror_x, ut['x'],
+                                                                          ut['y'])))
 
             if self.chk_dummy.isChecked():
                 layer_idx = target_layout.layer(db.LayerInfo(int(self.inp_dlyr.text()), int(self.inp_ddt.text())))
