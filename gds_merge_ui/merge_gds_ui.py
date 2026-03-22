@@ -3021,6 +3021,11 @@ if __name__ == "__main__":
 
     app = QtWidgets.QApplication(sys.argv)
     app.setStyle("Fusion")
+    app.setStyleSheet("QPushButton { font-size: 14px; padding: 4px; }")
+
+    font = app.font()
+    font.setPointSize(10)  # 默认通常是 8 或 9，改到 11 或 12 会清晰很多
+    app.setFont(font)
 
     window = GDSMergerProQt()
     window.show()
