@@ -378,7 +378,7 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
 
         # ======== 三种显示模式的下拉切换 ========
         self.cb_display = QtWidgets.QComboBox()
-        self.cb_display.addItems(["⬛ 黑盒模式 (BBox)", "🔲 外轮廓模式 (Outline)", "🎨 全图层模式 (Full Layers)"])
+        self.cb_display.addItems(["⬛ BBox", "🔲 Outline", "🎨 Full Layers"])
         self.cb_display.currentIndexChanged.connect(self.on_display_mode_change)
         tb1.addWidget(self.cb_display)
 
@@ -1787,8 +1787,8 @@ class GDSMergerProQt(QtWidgets.QMainWindow):
             text_path.addText(0, 0, font, gds['name'])
             br = text_path.boundingRect()
 
-            scale_w = (w * 0.8) / br.width() if br.width() > 0 else 1.0
-            scale_h = (h * 0.2) / br.height() if br.height() > 0 else 1.0
+            scale_w = (w * 0.5) / br.width() if br.width() > 0 else 1.0
+            scale_h = (h * 0.1) / br.height() if br.height() > 0 else 1.0
             scale = min(scale_w, scale_h)
 
             t_text = QtGui.QTransform()
